@@ -134,50 +134,6 @@
 
 ---
 
-## ساختن از روی سورس
-
-نیاز دارید: [Rust](https://rustup.rs) نسخهٔ ۱.۸۸ و [Node.js](https://nodejs.org) نسخهٔ ۲۰ به بالا، روی ویندوز.
-
-```bash
-npm ci
-npm run dev
-npm run build
-```
-
-نصاب ساخته‌شده در `src-tauri/target/release/bundle/nsis/` قرار می‌گیرد.
-
-نصاب‌های رسمی هم دقیقاً با همین دستورها ساخته می‌شوند، منتها روی سرورهای خود گیت‌هاب: هر تگ `v*` که push شود، ورک‌فلوی [`release.yml`](.github/workflows/release.yml) بیلد می‌کند و فایل را در Releases می‌گذارد. یعنی فایلی که دانلود می‌کنید از همین کدی ساخته شده که می‌بینید.
-
----
-
-## ساختار پروژه
-
-```
-src-tauri/src/
-  lib.rs              دستورهایی که رابط کاربری صدا می‌زند
-  settings.rs         خواندن و نوشتن تنظیمات
-  tray.rs             آیکون کنار ساعت ویندوز
-  steam.rs            منطق اصلی: وارد کردن، ورود، حذف
-  steam/
-    import.rs         خواندن و تشخیص فرمت توکن
-    crypto.rs         رمزگذاری DPAPI، به فرمت خود استیم
-    config.rs         نوشتن در فایل‌های کانفیگ استیم
-    account.rs        خواندن لیست اکانت‌ها
-    tokens.rs         انبار اکانت‌های خود برنامه
-    process.rs        بستن و باز کردن استیم
-    paths.rs          پیدا کردن مسیرهای استیم
-    vdf.rs            پارس کردن فرمت VDF استیم
-    downloads.rs      متوقف کردن آپدیت خودکار بازی‌ها
-ui/                   رابط کاربری (HTML/CSS/JS ساده)
-```
-
----
-
-## تشکر
-
-این برنامه بر پایهٔ [`fakearchie/nfatool`](https://github.com/fakearchie/nfatool) ساخته شده و با اجازهٔ سازنده‌اش منتشر می‌شود. ممنون از archie.
-
----
 
 <div align="center">
 
