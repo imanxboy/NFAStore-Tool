@@ -118,8 +118,13 @@ jobs:
           if (-not $setup) { Write-Error "No NSIS installer found in src-tauri/target/release/bundle/nsis/"; exit 1 }
           $name = "nfastore-tool-${{ steps.meta.outputs.version }}-setup.exe"
           Copy-Item $setup.FullName "dist/$name"
+          # A second copy under a name with no version in it, so
+          # /releases/latest/download/nfastore-tool-setup.exe keeps working after
+          # every release — that is the link the storefront points at.
+          Copy-Item $setup.FullName "dist/nfastore-tool-setup.exe"
           "asset_path=dist/$name" >> $env:GITHUB_ENV
-          Write-Host "Packaged $($setup.FullName) -> dist/$name"
+          "asset_stable=dist/nfastore-tool-setup.exe" >> $env:GITHUB_ENV
+          Write-Host "Packaged $($setup.FullName) -> dist/$name (+ stable alias)"
 
       - name: Create GitHub Release
         shell: bash
@@ -127,18 +132,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag_name }}
           ASSET: ${{ env.asset_path }}
+          ASSET_STABLE: ${{ env.asset_stable }}
         run: |
           set -euo pipefail
           TARGET="${{ github.sha }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG exists — uploading asset"
-            gh release upload "$TAG" "$ASSET" --clobber
+            echo "Release $TAG exists — uploading assets"
+            gh release upload "$TAG" "$ASSET" "$ASSET_STABLE" --clobber
           else
             echo "Creating release $TAG at $TARGET"
             gh release create "$TAG" \
               --target "$TARGET" \
               --title "$TAG" \
               --generate-notes \
-              "$ASSET"
+              "$ASSET" "$ASSET_STABLE"
           fi
           gh release view "$TAG"
