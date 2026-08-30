@@ -1,0 +1,14 @@
+{
+  "name": "nfastore-tool",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NFAStore Tool — Steam cache login desktop app for nfastore.org",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
