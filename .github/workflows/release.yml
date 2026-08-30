@@ -131,20 +131,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag_name }}
-          ASSET: ${{ env.asset_path }}
-          ASSET_STABLE: ${{ env.asset_stable }}
         run: |
           set -euo pipefail
+          # asset_path / asset_stable come straight from GITHUB_ENV in the
+          # packaging step. Read as plain variables rather than through
+          # ${{ env.* }}: the expression form resolved to nothing for the newer
+          # of the two, and under `set -u` that failed the release outright.
           TARGET="${{ github.sha }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG exists — uploading assets"
-            gh release upload "$TAG" "$ASSET" "$ASSET_STABLE" --clobber
+            echo "Release $TAG exists - uploading assets"
+            gh release upload "$TAG" "$asset_path" "$asset_stable" --clobber
           else
             echo "Creating release $TAG at $TARGET"
-            gh release create "$TAG" \
-              --target "$TARGET" \
-              --title "$TAG" \
-              --generate-notes \
-              "$ASSET" "$ASSET_STABLE"
+            gh release create "$TAG" --target "$TARGET" --title "$TAG" --generate-notes "$asset_path" "$asset_stable"
           fi
           gh release view "$TAG"
