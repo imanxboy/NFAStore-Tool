@@ -118,7 +118,6 @@ jobs:
           if (-not $setup) { Write-Error "No NSIS installer found in src-tauri/target/release/bundle/nsis/"; exit 1 }
           $name = "nfastore-tool-${{ steps.meta.outputs.version }}-setup.exe"
           Copy-Item $setup.FullName "dist/$name"
-          "asset_name=$name" >> $env:GITHUB_ENV
           "asset_path=dist/$name" >> $env:GITHUB_ENV
           Write-Host "Packaged $($setup.FullName) -> dist/$name"
 
@@ -143,66 +142,3 @@ jobs:
               "$ASSET"
           fi
           gh release view "$TAG"
-
-      - name: Post release to Discord
-        continue-on-error: true
-        shell: pwsh
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
-          REPO: ${{ github.repository }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-          SHA: ${{ github.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          ASSET_NAME: ${{ env.asset_name }}
-          ASSET_PATH: ${{ env.asset_path }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:DISCORD_WEBHOOK_URL)) {
-            Write-Error "DISCORD_WEBHOOK_URL secret is not set. Add it in repo Settings → Secrets → Actions."
-            exit 1
-          }
-
-          $releaseUrl = "$env:REPO_URL/releases/tag/$env:TAG_NAME"
-          $shaShort = $env:SHA.Substring(0, [Math]::Min(7, $env:SHA.Length))
-
-          $embed = @{
-            title = "Release $env:VERSION"
-            url = $releaseUrl
-            description = @"
-          A new **NFAStore Tool** build is ready.
-
-          Download the Windows installer attached below, run it, then open the app.
-          "@.Trim()
-            color = 5763719
-            fields = @(
-              @{ name = "Version"; value = "``$env:VERSION``"; inline = $true }
-              @{ name = "Platform"; value = "Windows x64"; inline = $true }
-              @{ name = "File"; value = "``$env:ASSET_NAME``"; inline = $true }
-              @{
-                name = "Commit"
-                value = "[``$shaShort``]($env:REPO_URL/commit/$env:SHA)"
-                inline = $false
-              }
-            )
-            footer = @{ text = "$env:REPO • Built by GitHub Actions" }
-            timestamp = (Get-Date).ToUniversalTime().ToString("o")
-          }
-
-          $payload = @{
-            username = "GitHub"
-            avatar_url = "https://avatars.githubusercontent.com/u/9919?s=200&v=4"
-            embeds = @($embed)
-          }
-
-          $payloadJson = $payload | ConvertTo-Json -Depth 12 -Compress
-          $payloadFile = Join-Path $env:RUNNER_TEMP "discord-payload.json"
-          [System.IO.File]::WriteAllText($payloadFile, $payloadJson, [System.Text.UTF8Encoding]::new($false))
-
-          Write-Host "Uploading $env:ASSET_PATH to Discord..."
-          & curl.exe -sS -f `
-            -F "payload_json=<$payloadFile" `
-            -F "file=@$env:ASSET_PATH;filename=$env:ASSET_NAME" `
-            $env:DISCORD_WEBHOOK_URL
-
-          Write-Host "Discord notification sent."
