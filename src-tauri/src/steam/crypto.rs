@@ -1,4 +1,7 @@
-use windows::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
+use base64::Engine;
+use windows::Win32::Security::Cryptography::{
+    CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB,
+};
 
 // Steam formats the CRC32 key as hex with leading zeros stripped and a trailing "1".
 pub(crate) fn compute_crc32(data: &str) -> String {
@@ -62,3 +65,119 @@ pub(crate) fn steam_encrypt(token: &str, account_name: &str) -> Result<String, S
         Ok(hex_string)
     }
 }
+
+// ---------------------------------------------------------------------------
+// At-rest protection for our own account store.
+//
+// Steam's copy of the token is already DPAPI-encrypted above, in Steam's exact
+// format. Our store is a second copy, kept so a sign-in can re-provision Steam
+// after a cache reset — and left in plain text it would hand every token to
+// anything that can read the user's %APPDATA%. So it gets the same DPAPI
+// treatment, scoped to the current user, with a fixed entropy string of our own
+// so a blob lifted from our file is not interchangeable with Steam's.
+// ---------------------------------------------------------------------------
+
+const STORE_ENTROPY: &[u8] = b"ir.nfastore.tool/accounts";
+
+/// CRYPTPROTECT_UI_FORBIDDEN — never raise a prompt, fail instead.
+const UI_FORBIDDEN: u32 = 0x1;
+
+/// DPAPI-encrypt a string for the current Windows user, base64 for JSON.
+pub(crate) fn protect_for_user(plain: &str) -> Result<String, String> {
+    let data = plain.as_bytes();
+    let data_in = CRYPT_INTEGER_BLOB {
+        cbData: data.len() as u32,
+        pbData: data.as_ptr() as *mut u8,
+    };
+    let entropy = CRYPT_INTEGER_BLOB {
+        cbData: STORE_ENTROPY.len() as u32,
+        pbData: STORE_ENTROPY.as_ptr() as *mut u8,
+    };
+    let mut data_out = CRYPT_INTEGER_BLOB::default();
+
+    unsafe {
+        CryptProtectData(
+            &data_in,
+            windows::core::PCWSTR::null(),
+            Some(&entropy),
+            None,
+            None,
+            UI_FORBIDDEN,
+            &mut data_out,
+        )
+        .map_err(|_| "CryptProtectData failed".to_string())?;
+
+        let slice = std::slice::from_raw_parts(data_out.pbData, data_out.cbData as usize);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(slice);
+        local_free(data_out.pbData);
+        Ok(encoded)
+    }
+}
+
+/// Reverse of `protect_for_user`. Fails on another user account or another PC,
+/// which is the point.
+pub(crate) fn unprotect_for_user(encoded: &str) -> Result<String, String> {
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| "Stored token is not valid base64.".to_string())?;
+
+    let data_in = CRYPT_INTEGER_BLOB {
+        cbData: raw.len() as u32,
+        pbData: raw.as_ptr() as *mut u8,
+    };
+    let entropy = CRYPT_INTEGER_BLOB {
+        cbData: STORE_ENTROPY.len() as u32,
+        pbData: STORE_ENTROPY.as_ptr() as *mut u8,
+    };
+    let mut data_out = CRYPT_INTEGER_BLOB::default();
+
+    unsafe {
+        CryptUnprotectData(
+            &data_in,
+            None,
+            Some(&entropy),
+            None,
+            None,
+            UI_FORBIDDEN,
+            &mut data_out,
+        )
+        .map_err(|_| "CryptUnprotectData failed".to_string())?;
+
+        let slice = std::slice::from_raw_parts(data_out.pbData, data_out.cbData as usize);
+        let plain = String::from_utf8_lossy(slice).into_owned();
+        local_free(data_out.pbData);
+        Ok(plain)
+    }
+}
+
+// Only ever called with a buffer DPAPI just handed back, which is exactly what
+// LocalFree expects.
+fn local_free(ptr: *mut u8) {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn LocalFree(hmem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    }
+    unsafe {
+        LocalFree(ptr as *mut std::ffi::c_void);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protect_round_trips() {
+        let secret = "eyJ0eXAiOiJKV1QifQ.payload.signature";
+        let sealed = protect_for_user(secret).expect("protect");
+        assert_ne!(sealed, secret);
+        assert_eq!(unprotect_for_user(&sealed).expect("unprotect"), secret);
+    }
+
+    #[test]
+    fn rejects_garbage() {
+        assert!(unprotect_for_user("not base64 at all !!").is_err());
+        assert!(unprotect_for_user("aGVsbG8gd29ybGQ=").is_err());
+    }
+}
+
