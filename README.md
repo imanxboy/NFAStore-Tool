@@ -6,7 +6,7 @@
 
 **ورود سریع به اکانت‌های استیم با توکن — بدون رمز عبور، بدون مرورگر**
 
-[![Version](https://img.shields.io/badge/version-v1.0.0-F26F21?style=flat-square)](https://github.com/imanxboy/NFAStore-Tool/releases/latest)
+[![Version](https://img.shields.io/badge/version-v1.1.0-F26F21?style=flat-square)](https://github.com/imanxboy/NFAStore-Tool/releases/latest)
 [![Platform](https://img.shields.io/badge/Windows-x64-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://github.com/imanxboy/NFAStore-Tool/releases/latest)
 [![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
 [![Source](https://img.shields.io/badge/source-open-2ea44f?style=flat-square&logo=github&logoColor=white)](https://github.com/imanxboy/NFAStore-Tool)
@@ -81,6 +81,31 @@
 | **Launch Steam minimized** | استیم را مینیمایز باز می‌کند. |
 | **Mute notifications on login** | صدا و نوتیفیکیشن‌های دوستان استیم را خاموش می‌کند. |
 
+بالای همین پنجره هم نسخهٔ فعلی برنامه نوشته شده و یک دکمهٔ **Check for updates** دارد.
+
+---
+
+## آپدیت برنامه
+
+در Settings دکمهٔ **Check for updates** را بزنید. اگر نسخهٔ جدیدی منتشر شده باشد،
+شمارهٔ آن را نشان می‌دهد و دکمه تبدیل به **Download** می‌شود؛ با زدنش نصاب در
+مرورگر شما دانلود می‌شود و کافی است اجرایش کنید — روی همان نصب فعلی می‌نشیند و
+اکانت‌ها و تنظیماتتان سرِ جایشان می‌مانند.
+
+**چرا دانلود در مرورگر و نه داخل برنامه؟** چون اندازه گرفتیم. از یک اتصال ایران
+بدون فیلترشکن:
+
+| | نتیجه |
+|---|---|
+| `api.github.com` (چک کردن نسخه) | جواب می‌دهد، حدود ۹ ثانیه |
+| `release-assets.githubusercontent.com` (خودِ فایل) | صفر بایت در ۲۰ ثانیه — بسته است |
+| همان فایل با فیلترشکن | ۶۴ کیلوبایت در ۱٫۵ ثانیه |
+
+یعنی برنامه *می‌تواند* بفهمد آپدیتی هست، ولی *نمی‌تواند* مطمئن دانلودش کند. اگر
+دانلود را داخل برنامه می‌گذاشتیم، برای بیشتر کاربرها یک نوار پیشرفت بود که تکان
+نمی‌خورد. مرورگر شما همان فیلترشکنی را دارد که برای بقیهٔ گیت‌هاب استفاده می‌کنید،
+پس دانلود به او سپرده می‌شود. یک کلیک در هر دو حالت — این یکی کار می‌کند.
+
 ---
 
 ## این برنامه با کامپیوتر شما چه می‌کند
@@ -131,6 +156,12 @@
 
 **ویندوز نصاب را بلاک کرد**
 بخش دانلود و نصب را ببینید — گواهی امضا ندارد، ویروس ندارد.
+
+**اکانتی از لیست پاک نمی‌شود**
+تا نسخهٔ ۱.۰.۰ این یک باگ بود: اگر اکانتی از خود استیم حذف شده بود، حذفش از این
+لیست با پیام «Account was not found in loginusers.vdf» شکست می‌خورد و هیچ‌وقت پاک
+نمی‌شد. از نسخهٔ ۱.۱.۰ حذف همیشه انجام می‌شود؛ اگر استیم هم بسته نشده باشد یا نصب
+نباشد، اکانت از لیست می‌رود و برنامه فقط می‌گوید که استیم را نتوانست تمیز کند.
 
 ---
 

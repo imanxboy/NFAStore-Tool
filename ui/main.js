@@ -219,6 +219,88 @@ function closeConfirm() {
 }
 
 /* ---------- Settings ---------- */
+/* ---------- updates ---------- */
+
+const REPO = "imanxboy/NFAStore-Tool";
+const RELEASES_API = `https://api.github.com/repos/${REPO}/releases/latest`;
+const INSTALLER_URL = `https://github.com/${REPO}/releases/latest/download/nfastore-tool-setup.exe`;
+
+let pendingUpdateUrl = null;
+
+/**
+ * The check runs here rather than in Rust on purpose.
+ *
+ * api.github.com is reachable from Iran without a VPN; the host the installer
+ * actually lives on is not (measured: zero bytes in 20s direct, 64KB in 1.5s
+ * through a VPN). So the app finds out about the update itself and hands the
+ * download to the browser, which already has whatever the customer uses for the
+ * rest of GitHub.
+ */
+async function checkForUpdates() {
+  const btn = el("updateBtn");
+  const status = el("updateStatus");
+
+  if (pendingUpdateUrl) {
+    try {
+      await invoke("open_release_link", { url: pendingUpdateUrl });
+      status.textContent = "Opened in your browser. Run the installer when it finishes.";
+    } catch (e) {
+      status.textContent = formatError(e);
+      status.classList.add("is-error");
+    }
+    return;
+  }
+
+  btn.disabled = true;
+  status.classList.remove("is-error");
+  status.textContent = "Checking…";
+
+  try {
+    // GitHub is slow to answer from here but it does answer; give it room
+    // rather than reporting a failure that is really just latency.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    const res = await fetch(RELEASES_API, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+
+    const release = await res.json();
+    const latest = String(release.tag_name || "").trim();
+    if (!latest) throw new Error("No release found.");
+
+    const available = await invoke("is_update_available", { latest });
+
+    if (available) {
+      pendingUpdateUrl = INSTALLER_URL;
+      status.textContent = `Version ${latest.replace(/^v/i, "")} is available.`;
+      btn.textContent = "Download";
+      btn.classList.add("is-update");
+    } else {
+      status.textContent = "You are on the latest version.";
+    }
+  } catch (e) {
+    status.textContent =
+      e && e.name === "AbortError"
+        ? "GitHub did not answer in time. Try again, or check with a VPN on."
+        : `Could not check for updates. ${formatError(e)}`;
+    status.classList.add("is-error");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadVersion() {
+  try {
+    el("appVersion").textContent = await invoke("app_version");
+  } catch {
+    el("appVersion").textContent = "?";
+  }
+}
+
 const settingsModal = el("settingsModal");
 
 function syncSettingsForm() {
@@ -273,6 +355,7 @@ el("refreshBtn").addEventListener("click", () => refresh());
 el("doImportBtn").addEventListener("click", importManual);
 el("dangerBtn").addEventListener("click", askClearSteam);
 el("settingsBtn").addEventListener("click", openSettings);
+el("updateBtn").addEventListener("click", checkForUpdates);
 settingsModal.addEventListener("change", onSettingToggle);
 
 // Custom titlebar window controls (frameless window).
@@ -333,3 +416,4 @@ listen("status", (e) => {
 listen("status-error", (e) => toast(e.payload, "err"));
 
 loadSettings().then(() => refresh());
+loadVersion();

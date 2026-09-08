@@ -112,6 +112,13 @@
           <button class="btn-icon" data-action="close-settings" title="Close" aria-label="Close">&times;</button>
         </div>
         <div class="settings-list">
+          <div class="setting-row setting-row-update">
+            <span class="setting-info">
+              <span class="setting-label">Version <span id="appVersion">…</span></span>
+              <span class="setting-desc" id="updateStatus">Check whether a newer build is available.</span>
+            </span>
+            <button id="updateBtn" class="btn-small" type="button">Check for updates</button>
+          </div>
           <label class="setting-row">
             <span class="setting-info">
               <span class="setting-label">Always start Invisible</span>

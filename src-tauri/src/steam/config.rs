@@ -331,13 +331,28 @@ fn insert_new_user(content: &str, username: &str, steamid: &str) -> Result<Strin
     Ok(new_content)
 }
 
+/// Remove an account from loginusers.vdf, treating "it was not there" as done.
+///
+/// Removal is idempotent by definition: the caller wants the account gone, and
+/// an account that is already absent satisfies that. This used to return an
+/// error instead, which aborted the whole delete before it reached our own
+/// records — so an account Steam had already forgotten was precisely the one
+/// the customer could never remove from the list.
+///
+/// A missing file is the same story: no file, nothing to remove.
 pub(crate) fn remove_loginuser(path: &Path, steamid: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
     let content = fs::read_to_string(path).map_err(|_| "Failed to read loginusers.vdf")?;
-    let new_content = remove_steamid_block(&content, steamid)?;
+    let Some(new_content) = remove_steamid_block(&content, steamid) else {
+        return Ok(());
+    };
     fs::write(path, new_content).map_err(|_| "Failed to write loginusers.vdf".to_string())
 }
 
-fn remove_steamid_block(content: &str, steamid: &str) -> Result<String, String> {
+/// The rewritten file, or `None` when the account was not in it to begin with.
+fn remove_steamid_block(content: &str, steamid: &str) -> Option<String> {
     let lines: Vec<&str> = content.lines().collect();
     let mut output = String::new();
     let mut removed = false;
@@ -372,9 +387,9 @@ fn remove_steamid_block(content: &str, steamid: &str) -> Result<String, String> 
     }
 
     if removed {
-        Ok(output)
+        Some(output)
     } else {
-        Err("Account was not found in loginusers.vdf.".to_string())
+        None
     }
 }
 
@@ -625,5 +640,58 @@ mod tests {
         assert!(updated.to_lowercase().contains("\"accounts\""));
         assert!(config_contains_steamid(&updated, "76561199843081825"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    const LOGINUSERS: &str = r#""users"
+{
+	"76561199843081825"
+	{
+		"AccountName"		"someone"
+		"MostRecent"		"1"
+	}
+}
+"#;
+
+    #[test]
+    fn removing_a_listed_account_rewrites_the_file() {
+        let updated = remove_steamid_block(LOGINUSERS, "76561199843081825").unwrap();
+        assert!(!updated.contains("76561199843081825"));
+        assert!(!updated.contains("someone"));
+    }
+
+    #[test]
+    fn removing_an_account_that_is_not_there_is_not_a_rewrite() {
+        assert!(remove_steamid_block(LOGINUSERS, "76561190000000000").is_none());
+    }
+
+    /// The bug this file was changed for.
+    ///
+    /// An account Steam has already forgotten is not in loginusers.vdf, and the
+    /// old code returned "Account was not found in loginusers.vdf." here. That
+    /// error aborted the delete before it reached our own records, so the one
+    /// row the customer wanted gone was the one row that could never be removed.
+    /// Removal is idempotent: already-absent is done.
+    #[test]
+    fn removing_an_absent_account_succeeds() {
+        let dir = std::env::temp_dir().join(format!("nfatool_rm_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("loginusers.vdf");
+        fs::write(&path, LOGINUSERS).unwrap();
+
+        assert!(remove_loginuser(&path, "76561190000000000").is_ok());
+        // Untouched, because there was nothing of that account to remove.
+        assert_eq!(fs::read_to_string(&path).unwrap(), LOGINUSERS);
+
+        assert!(remove_loginuser(&path, "76561199843081825").is_ok());
+        assert!(!fs::read_to_string(&path).unwrap().contains("76561199843081825"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removing_from_a_missing_file_succeeds() {
+        let path = std::env::temp_dir().join("nfatool_no_such_loginusers.vdf");
+        let _ = fs::remove_file(&path);
+        assert!(remove_loginuser(&path, "76561199843081825").is_ok());
     }
 }

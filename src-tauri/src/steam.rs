@@ -116,36 +116,78 @@ pub fn handle_login_account(account: &SteamAccount) -> Result<String, String> {
     ))
 }
 
+/// Remove an account from the list, and scrub it from Steam where we can.
+///
+/// The order matters and it used to be the wrong way round. Scrubbing Steam
+/// came first and any failure aborted the whole thing, so an account Steam had
+/// already dropped — deleted inside Steam, or left behind by a reinstall — could
+/// never be removed here: the delete died on "not found in loginusers.vdf"
+/// before it reached our own records, and Refresh could not help because the row
+/// was coming from those records in the first place.
+///
+/// Our record is the list. Removing it is the operation, and it always happens.
+/// Everything Steam-side is best-effort cleanup around it, reported but never
+/// fatal, because a Steam that is uninstalled, moved, running or simply out of
+/// sync is not a reason to trap a dead row in the customer's list forever.
 pub fn handle_delete_account(account: &SteamAccount) -> Result<String, String> {
-    let steam_path_string = paths::get_steam_path()?;
-    let steam_path = Path::new(&steam_path_string);
-    process::stop_steam()?;
+    let mut warning: Option<String> = None;
 
-    config::remove_loginuser(
-        &steam_path.join("config").join("loginusers.vdf"),
-        &account.steamid,
-    )?;
+    match paths::get_steam_path() {
+        Ok(steam_path_string) => {
+            let steam_path = Path::new(&steam_path_string);
 
-    let config_vdf = steam_path.join("config").join("config.vdf");
-    if config_vdf.exists() {
-        config::remove_config_account(&config_vdf, &account.steamid)?;
-    }
+            // Steam rewrites these files on exit, so edits only stick once it is
+            // stopped. If it will not stop, skip the file work rather than make
+            // changes Steam is about to undo.
+            if let Err(err) = process::stop_steam() {
+                warning = Some(err);
+            } else {
+                let config_dir = steam_path.join("config");
 
-    if let Ok(local_dir) = paths::local_steam_cache_path() {
-        let local_vdf = local_dir.join("local.vdf");
-        if local_vdf.exists() {
-            let crc = crypto::compute_crc32(&account.account_name);
-            if let Ok(content) = std::fs::read_to_string(&local_vdf) {
-                let updated = config::remove_connect_cache_entry(&content, &crc);
-                let _ = std::fs::write(&local_vdf, updated);
+                if let Err(err) =
+                    config::remove_loginuser(&config_dir.join("loginusers.vdf"), &account.steamid)
+                {
+                    if warning.is_none() {
+                        warning = Some(err);
+                    }
+                }
+
+                let config_vdf = config_dir.join("config.vdf");
+                if config_vdf.exists() {
+                    if let Err(err) = config::remove_config_account(&config_vdf, &account.steamid) {
+                        if warning.is_none() {
+                            warning = Some(err);
+                        }
+                    }
+                }
+
+                if let Ok(local_dir) = paths::local_steam_cache_path() {
+                    let local_vdf = local_dir.join("local.vdf");
+                    if local_vdf.exists() {
+                        let crc = crypto::compute_crc32(&account.account_name);
+                        if let Ok(content) = std::fs::read_to_string(&local_vdf) {
+                            let updated = config::remove_connect_cache_entry(&content, &crc);
+                            let _ = std::fs::write(&local_vdf, updated);
+                        }
+                    }
+                }
+
+                process::clear_autologin_if_matches(&account.account_name);
             }
         }
+        Err(err) => warning = Some(err),
     }
 
-    process::clear_autologin_if_matches(&account.account_name);
+    // The one step that defines the operation.
     tokens::remove_record(&account.steamid);
 
-    Ok(format!("Removed {}.", account.display_name()))
+    Ok(match warning {
+        Some(err) => format!(
+            "Removed {} from the list. Steam was not tidied up: {err}",
+            account.display_name()
+        ),
+        None => format!("Removed {}.", account.display_name()),
+    })
 }
 
 pub fn handle_clear_steam() -> Result<String, String> {

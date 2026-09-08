@@ -1,6 +1,7 @@
 mod settings;
 mod steam;
 mod tray;
+mod update;
 
 use base64::Engine;
 use serde::Serialize;
@@ -92,6 +93,28 @@ fn remove_account(app: AppHandle, steamid: String) -> Result<String, String> {
     finish_account_op(&app, steam::handle_delete_account(&find_account(&steamid)?))
 }
 
+/// Our own version, for the "you are on x, latest is y" line in Settings.
+#[tauri::command]
+fn app_version() -> String {
+    update::current_version()
+}
+
+/// Whether a tag from GitHub is actually newer than what is running.
+///
+/// The fetch happens in the webview — `api.github.com` is reachable where the
+/// release assets are not, see update.rs — but the comparison lives here so it
+/// is the same code the tests cover.
+#[tauri::command]
+fn is_update_available(latest: String) -> bool {
+    update::is_newer(&latest, &update::current_version())
+}
+
+/// Open a release link in the customer's browser, which is where their VPN is.
+#[tauri::command]
+fn open_release_link(url: String) -> Result<(), String> {
+    update::open_link(&url)
+}
+
 #[tauri::command]
 fn clear_steam(app: AppHandle) -> Result<String, String> {
     finish_account_op(&app, steam::handle_clear_steam())
@@ -124,6 +147,9 @@ pub fn run() {
             import_account,
             sign_in,
             remove_account,
+            app_version,
+            is_update_available,
+            open_release_link,
             clear_steam,
             get_settings,
             save_settings

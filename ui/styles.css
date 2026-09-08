@@ -919,3 +919,44 @@ textarea:focus {
 .hidden {
   display: none !important;
 }
+
+/* ---------- update row in Settings ---------- */
+
+/* Not a <label>, so it does not steal clicks from the button inside it. */
+.setting-row-update {
+  cursor: default;
+}
+
+.btn-small {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-small:hover:not(:disabled) {
+  background: var(--surface-3, var(--surface-2));
+  border-color: var(--line-strong, var(--line));
+}
+
+.btn-small:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Reads as "there is something to do here" without shouting. */
+.btn-small.is-update {
+  border-color: var(--accent, #cf8064);
+  color: var(--accent, #cf8064);
+}
+
+#updateStatus.is-error {
+  color: var(--danger, #e0736b);
+}
