@@ -30,7 +30,7 @@
 ## دانلود و نصب
 
 ۱. به [صفحهٔ Releases](https://github.com/imanxboy/NFAStore-Tool/releases/latest) بروید.
-۲. فایل `nfastore-tool-v1.0.0-setup.exe` را دانلود کنید.
+۲. فایل `nfastore-tool-v1.1.0-setup.exe` را دانلود کنید.
 ۳. اجرایش کنید. نصب چند ثانیه طول می‌کشد.
 
 > **ویندوز ممکن است هشدار بدهد.** پیام «Windows protected your PC» به این معنا نیست که فایل ویروس دارد — به این معناست که این نصاب گواهی امضای دیجیتال (code signing certificate) ندارد، که برای یک برنامهٔ رایگان چیز عادی است. روی **More info** و بعد **Run anyway** بزنید.
