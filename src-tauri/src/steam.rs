@@ -9,7 +9,10 @@ mod tokens;
 mod vdf;
 
 pub use account::{load_steam_accounts, SteamAccount};
-pub use import::{expiry_from_jwt, read_clipboard};
+pub use import::read_clipboard;
+// Crate-internal, so it is re-exported as such: `pub use` on a
+// `pub(crate)` item is a compile error, not a widening.
+pub(crate) use import::expiry_from_jwt;
 use import::write_clipboard;
 
 use std::path::Path;
