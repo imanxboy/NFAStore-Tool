@@ -69,6 +69,11 @@ fn list_accounts() -> Result<Vec<AccountDto>, String> {
 }
 
 #[tauri::command]
+fn copy_token(steamid: String) -> Result<String, String> {
+    steam::handle_copy_token(&find_account(&steamid)?)
+}
+
+#[tauri::command]
 fn read_clipboard() -> Result<String, String> {
     steam::read_clipboard()
 }
@@ -142,6 +147,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_accounts,
+            copy_token,
             read_clipboard,
             import_clipboard,
             import_account,

@@ -6,7 +6,7 @@
 
 **ورود سریع به اکانت‌های استیم با توکن — بدون رمز عبور، بدون مرورگر**
 
-[![Version](https://img.shields.io/badge/version-v1.1.0-F26F21?style=flat-square)](https://github.com/imanxboy/NFAStore-Tool/releases/latest)
+[![Version](https://img.shields.io/badge/version-v1.2.0-F26F21?style=flat-square)](https://github.com/imanxboy/NFAStore-Tool/releases/latest)
 [![Platform](https://img.shields.io/badge/Windows-x64-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://github.com/imanxboy/NFAStore-Tool/releases/latest)
 [![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
 [![Source](https://img.shields.io/badge/source-open-2ea44f?style=flat-square&logo=github&logoColor=white)](https://github.com/imanxboy/NFAStore-Tool)
@@ -30,7 +30,7 @@
 ## دانلود و نصب
 
 ۱. به [صفحهٔ Releases](https://github.com/imanxboy/NFAStore-Tool/releases/latest) بروید.
-۲. فایل `nfastore-tool-v1.1.0-setup.exe` را دانلود کنید.
+۲. فایل `nfastore-tool-v1.2.0-setup.exe` را دانلود کنید.
 ۳. اجرایش کنید. نصب چند ثانیه طول می‌کشد.
 
 > **ویندوز ممکن است هشدار بدهد.** پیام «Windows protected your PC» به این معنا نیست که فایل ویروس دارد — به این معناست که این نصاب گواهی امضای دیجیتال (code signing certificate) ندارد، که برای یک برنامهٔ رایگان چیز عادی است. روی **More info** و بعد **Run anyway** بزنید.
@@ -68,6 +68,14 @@
 اکانت‌های واردشده در لیست می‌مانند. برای عوض کردن اکانت فقط روی دکمهٔ **←** کنار اسمش بزنید. لازم نیست دوباره توکن را وارد کنید.
 
 برنامه با بستن پنجره از بین نمی‌رود و کنار ساعت ویندوز (system tray) می‌ماند. از همان‌جا هم می‌توانید اکانت عوض کنید.
+
+### گرفتن دوبارهٔ توکن
+
+کنار هر اکانت یک دکمهٔ **کپی** هست که توکن ورود همان اکانت را دوباره روی کلیپ‌بورد می‌گذارد — مثلاً اگر بخواهید اکانت را به دوستتان بدهید، یا صفحهٔ سفارش دیگر دم دستتان نیست.
+
+توکن از همان جایی خوانده می‌شود که خود برنامه نگهش داشته (قفل‌شده با DPAPI ویندوز) و **مستقیم از سمت Rust روی کلیپ‌بورد می‌رود** — یعنی اصلاً وارد رابط کاربری نمی‌شود و هیچ‌جا هم لاگ نمی‌شود.
+
+> ⚠️ توکن یعنی خود اکانت. هرکس آن را داشته باشد می‌تواند وارد شود.
 
 ---
 

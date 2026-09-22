@@ -3,6 +3,20 @@ use clipboard::ClipboardProvider;
 
 use super::vdf::validate_vdf_value;
 
+/// Put text on the clipboard.
+///
+/// Lives here beside the reader so both halves use the same clipboard context,
+/// and so a token can be handed back to the customer without ever crossing into
+/// the webview — the UI asks for the copy, Rust does it, and the value itself
+/// stays on this side.
+pub fn write_clipboard(text: &str) -> Result<(), String> {
+    let mut clipboard = clipboard::ClipboardContext::new()
+        .map_err(|_| "Clipboard is not available.".to_string())?;
+    clipboard
+        .set_contents(text.to_string())
+        .map_err(|_| "Could not write to the clipboard.".to_string())
+}
+
 pub fn read_clipboard() -> Result<String, String> {
     let mut clipboard = clipboard::ClipboardContext::new()
         .map_err(|_| "Clipboard is not available. Copy the account payload and try again.")?;

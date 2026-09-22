@@ -19,6 +19,8 @@ let settings = {
 
 const SIGNIN_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/></svg>';
+const COPY_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const TRASH_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
 
@@ -82,6 +84,7 @@ function render() {
           </div>
           <div class="row-actions">
             <button class="icon-btn primary" data-signin="${escapeAttr(acc.steamid)}" title="Sign in" aria-label="Sign in as ${escapeAttr(view.display_name)}">${SIGNIN_SVG}</button>
+            <button class="icon-btn" data-copy="${escapeAttr(acc.steamid)}" title="Copy login token" aria-label="Copy the login token for ${escapeAttr(view.display_name)}">${COPY_SVG}</button>
             <button class="icon-btn danger" data-remove="${escapeAttr(acc.steamid)}" title="Remove" aria-label="Remove account">${TRASH_SVG}</button>
           </div>
         </div>`;
@@ -159,6 +162,21 @@ async function signIn(steamid) {
     const msg = await invoke("sign_in", { steamid });
     await refresh();
     toast(msg, "ok");
+  } catch (e) {
+    toast(formatError(e), "err");
+  }
+}
+
+/**
+ * Put the account's login token back on the clipboard.
+ *
+ * The token never comes through here: Rust reads it from the sealed store and
+ * writes it to the clipboard itself, so the only thing this function handles is
+ * the sentence that comes back.
+ */
+async function copyToken(steamid) {
+  try {
+    toast(await invoke("copy_token", { steamid }), "ok");
   } catch (e) {
     toast(formatError(e), "err");
   }
@@ -387,6 +405,8 @@ document.addEventListener("click", (e) => {
   }
   const signin = e.target.closest("[data-signin]");
   if (signin) return signIn(signin.dataset.signin);
+  const copy = e.target.closest("[data-copy]");
+  if (copy) return copyToken(copy.dataset.copy);
   const remove = e.target.closest("[data-remove]");
   if (remove) return askRemove(remove.dataset.remove);
 });

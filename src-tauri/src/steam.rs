@@ -10,6 +10,7 @@ mod vdf;
 
 pub use account::{load_steam_accounts, SteamAccount};
 pub use import::read_clipboard;
+use import::write_clipboard;
 
 use std::path::Path;
 use std::time::Duration;
@@ -114,6 +115,32 @@ pub fn handle_login_account(account: &SteamAccount) -> Result<String, String> {
         "Signed in as {}. Starting Steam.",
         account.display_name()
     ))
+}
+
+/// Copy an account's login token back to the clipboard.
+///
+/// The token is the account. Handing it to a friend, or keeping a copy once the
+/// order page has scrolled out of reach, is an ordinary thing for the person
+/// who bought it to want — and after an import this app is the only place it
+/// still exists in the clear.
+///
+/// The value goes straight from our own store to the clipboard: it is never
+/// returned to the webview, never logged, and never written anywhere else.
+pub fn handle_copy_token(account: &SteamAccount) -> Result<String, String> {
+    let token = account
+        .token
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| {
+            // Accounts imported before the app kept tokens, and accounts whose
+            // sealed copy will not open on this Windows user, both land here.
+            "No token is stored for this account. Import it again from your order page to keep a copy."
+                .to_string()
+        })?;
+
+    write_clipboard(token)?;
+    Ok("Login token copied to the clipboard.".to_string())
 }
 
 /// Remove an account from the list, and scrub it from Steam where we can.
