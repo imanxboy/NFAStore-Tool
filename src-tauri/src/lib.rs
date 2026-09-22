@@ -17,6 +17,9 @@ struct AccountDto {
     initials: String,
     most_recent: bool,
     avatar: Option<String>,
+    /// Unix seconds the login token stops working, read out of the token
+    /// itself. None when there is no stored token, or it carries no expiry.
+    token_expires_at: Option<i64>,
 }
 
 impl From<&SteamAccount> for AccountDto {
@@ -29,6 +32,7 @@ impl From<&SteamAccount> for AccountDto {
             initials: a.initials(),
             most_recent: a.most_recent,
             avatar: a.avatar_path.as_ref().and_then(|p| avatar_data_url(p)),
+            token_expires_at: a.token.as_deref().and_then(steam::expiry_from_jwt),
         }
     }
 }

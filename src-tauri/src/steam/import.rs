@@ -117,6 +117,29 @@ pub(crate) fn extract_steamid_from_jwt(jwt: &str) -> Result<String, String> {
     Ok(steamid.to_string())
 }
 
+/// When the token stops working, as unix seconds.
+///
+/// A Steam login token carries its own expiry in the `exp` claim, so this is a
+/// plain read of something already sitting in the store — no network, and no
+/// signing in anywhere. Worth surfacing because the date is the moment the
+/// account becomes unreachable, and until now the only way to see it was to
+/// decode the token by hand.
+///
+/// Returns None rather than an error: a token we cannot read the expiry from is
+/// still a token that signs in, and the row should say "unknown" instead of
+/// refusing to draw.
+pub(crate) fn expiry_from_jwt(jwt: &str) -> Option<i64> {
+    let payload = decode_jwt_payload(jwt).ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    match json.get("exp")? {
+        // Steam sends a number, but a string is cheap to accept and costs
+        // nothing to be wrong about.
+        serde_json::Value::Number(n) => n.as_i64(),
+        serde_json::Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
 fn sanitize_clipboard_input(input: &str) -> String {
     input
         .replace(['\u{feff}', '\u{200b}'], "")

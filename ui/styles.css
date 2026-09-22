@@ -960,3 +960,20 @@ textarea:focus {
 #updateStatus.is-error {
   color: var(--danger, #e0736b);
 }
+
+/* Token expiry, under the account name. Three states, because "valid until
+   March" and "expired last week" should not read the same. */
+.row-expiry {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.3;
+  color: var(--text-faint);
+}
+
+.row-expiry.soon {
+  color: #f0a63c;
+}
+
+.row-expiry.gone {
+  color: #ef5f5f;
+}

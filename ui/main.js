@@ -24,6 +24,30 @@ const COPY_SVG =
 const TRASH_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
 
+/**
+ * How long the login token has left, in words.
+ *
+ * The date comes out of the token itself, so it is the moment the account stops
+ * being reachable — not a guess and not a warranty date. Anything inside a
+ * fortnight is worth warning about, and an expired one is worth saying plainly
+ * rather than printing a date in the past and leaving the customer to work it
+ * out.
+ */
+function tokenExpiry(seconds) {
+  if (!seconds) return null;
+
+  const when = new Date(seconds * 1000);
+  if (Number.isNaN(when.getTime())) return null;
+
+  const date = when.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  const daysLeft = Math.floor((when.getTime() - Date.now()) / 86400000);
+
+  if (daysLeft < 0) return { text: `Token expired ${date}`, level: "gone" };
+  if (daysLeft === 0) return { text: "Token expires today", level: "soon" };
+  if (daysLeft <= 14) return { text: `Token expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`, level: "soon" };
+  return { text: `Token valid until ${date}`, level: "ok" };
+}
+
 function toast(message, kind = "ok") {
   const node = document.createElement("div");
   node.className = "toast " + kind;
@@ -75,12 +99,16 @@ function render() {
         ? `<div class="avatar"><img src="${escapeAttr(view.avatar)}" alt="" /></div>`
         : `<div class="avatar">${escapeHtml(view.initials)}</div>`;
       const tag = acc.most_recent ? '<span class="row-tag">Last used</span>' : "";
+      // Hidden in streamer mode along with everything else that identifies the
+      // account: a precise expiry date is as good as a fingerprint on stream.
+      const expiry = settings.streamer_mode ? null : tokenExpiry(acc.token_expires_at);
       return `
         <div class="row">
           ${avatar}
           <div class="row-info">
             <div class="row-name"><span>${escapeHtml(view.display_name)}</span>${tag}</div>
             <div class="row-login">${escapeHtml(view.account_name)}</div>
+            ${expiry ? `<div class="row-expiry ${expiry.level}">${escapeHtml(expiry.text)}</div>` : ""}
           </div>
           <div class="row-actions">
             <button class="icon-btn primary" data-signin="${escapeAttr(acc.steamid)}" title="Sign in" aria-label="Sign in as ${escapeAttr(view.display_name)}">${SIGNIN_SVG}</button>

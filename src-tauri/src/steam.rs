@@ -9,7 +9,7 @@ mod tokens;
 mod vdf;
 
 pub use account::{load_steam_accounts, SteamAccount};
-pub use import::read_clipboard;
+pub use import::{expiry_from_jwt, read_clipboard};
 use import::write_clipboard;
 
 use std::path::Path;
