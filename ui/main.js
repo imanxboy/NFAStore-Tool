@@ -8,6 +8,9 @@ const emptyState = el("emptyState");
 const toastWrap = el("toastWrap");
 
 let accounts = [];
+// Keyed by steamid: {loading} | {data: Cs2Rank} | {error}. Kept across renders
+// so a rank a customer pulled stays put until they ask again or reopen the app.
+let ranks = {};
 let confirmHandler = null;
 let settings = {
   always_invisible: true,
@@ -23,6 +26,11 @@ const COPY_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const TRASH_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+const RANK_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3"/></svg>';
+
+/** The far-future second the parser uses for a ban with no end (see gcpd.rs). */
+const COOLDOWN_PERMANENT = 2000000000;
 
 /**
  * How long the login token has left, in words.
@@ -46,6 +54,48 @@ function tokenExpiry(seconds) {
   if (daysLeft === 0) return { text: "Token expires today", level: "soon" };
   if (daysLeft <= 14) return { text: `Token expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`, level: "soon" };
   return { text: `Token valid until ${date}`, level: "ok" };
+}
+
+/**
+ * The cooldown, in words, with a severity so the chip can carry the colour.
+ *
+ * 0 is a confirmed clear account; the sidecar already turned an expired
+ * cooldown into 0, so anything positive is really pending. The far-future
+ * sentinel is a ban with no end.
+ */
+function cooldownText(unix) {
+  if (!unix) return { text: "No cooldown", level: "ok" };
+  if (unix === COOLDOWN_PERMANENT) return { text: "Permanent ban", level: "gone" };
+  const remaining = unix * 1000 - Date.now();
+  if (remaining <= 0) return { text: "No cooldown", level: "ok" };
+  const mins = Math.floor(remaining / 60000);
+  if (mins < 60) return { text: `Cooldown ${Math.max(1, mins)}m`, level: "soon" };
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return { text: `Cooldown ${hours}h`, level: "soon" };
+  return { text: `Cooldown ${Math.floor(hours / 24)}d`, level: "gone" };
+}
+
+/** The rank line under an account: nothing until asked, then chips or a reason. */
+function rankArea(steamid) {
+  const r = ranks[steamid];
+  if (!r) return "";
+  if (r.loading) return '<div class="row-rank muted">Checking status…</div>';
+  if (r.error) return `<div class="row-rank err">${escapeHtml(r.error)}</div>`;
+
+  const d = r.data;
+  const chips = [];
+  if (d.premierRating > 0) {
+    chips.push(`<span class="rank-chip">Premier ${d.premierRating.toLocaleString("en-US")}</span>`);
+  }
+  if (d.wingmanRank > 0) {
+    chips.push(`<span class="rank-chip">Wingman ${d.wingmanRank}</span>`);
+  }
+  if (d.premierRating <= 0 && d.wingmanRank <= 0) {
+    chips.push('<span class="rank-chip">Unranked</span>');
+  }
+  const cd = cooldownText(d.cooldownExpiresUnix);
+  chips.push(`<span class="rank-chip ${cd.level}">${escapeHtml(cd.text)}</span>`);
+  return `<div class="row-rank">${chips.join("")}</div>`;
 }
 
 function toast(message, kind = "ok") {
@@ -102,6 +152,12 @@ function render() {
       // Hidden in streamer mode along with everything else that identifies the
       // account: a precise expiry date is as good as a fingerprint on stream.
       const expiry = settings.streamer_mode ? null : tokenExpiry(acc.token_expires_at);
+      // Rank and its button hide with everything else on stream: a Premier
+      // rating and win count point at a specific account as surely as a name.
+      const showRank = !settings.streamer_mode;
+      const rankBtn = showRank
+        ? `<button class="icon-btn" data-rank="${escapeAttr(acc.steamid)}" title="Check CS2 status" aria-label="Check the CS2 rank and cooldown for ${escapeAttr(view.display_name)}">${RANK_SVG}</button>`
+        : "";
       return `
         <div class="row">
           ${avatar}
@@ -109,9 +165,11 @@ function render() {
             <div class="row-name"><span>${escapeHtml(view.display_name)}</span>${tag}</div>
             <div class="row-login">${escapeHtml(view.account_name)}</div>
             ${expiry ? `<div class="row-expiry ${expiry.level}">${escapeHtml(expiry.text)}</div>` : ""}
+            ${showRank ? rankArea(acc.steamid) : ""}
           </div>
           <div class="row-actions">
             <button class="icon-btn primary" data-signin="${escapeAttr(acc.steamid)}" title="Sign in" aria-label="Sign in as ${escapeAttr(view.display_name)}">${SIGNIN_SVG}</button>
+            ${rankBtn}
             <button class="icon-btn" data-copy="${escapeAttr(acc.steamid)}" title="Copy login token" aria-label="Copy the login token for ${escapeAttr(view.display_name)}">${COPY_SVG}</button>
             <button class="icon-btn danger" data-remove="${escapeAttr(acc.steamid)}" title="Remove" aria-label="Remove account">${TRASH_SVG}</button>
           </div>
@@ -208,6 +266,25 @@ async function copyToken(steamid) {
   } catch (e) {
     toast(formatError(e), "err");
   }
+}
+
+/**
+ * Pull one account's CS2 rank and cooldown.
+ *
+ * Slow on purpose — it is a real Steam logon behind the scenes — so it only
+ * runs when the customer asks, and the row shows "Checking status…" while it
+ * does. The token never comes through here; Rust reads it from the sealed store
+ * and hands it to the helper.
+ */
+async function checkRank(steamid) {
+  ranks[steamid] = { loading: true };
+  render();
+  try {
+    ranks[steamid] = { data: await invoke("cs2_rank", { steamid }) };
+  } catch (e) {
+    ranks[steamid] = { error: formatError(e) };
+  }
+  render();
 }
 
 function askRemove(steamid) {
@@ -449,6 +526,8 @@ document.addEventListener("click", (e) => {
   }
   const signin = e.target.closest("[data-signin]");
   if (signin) return signIn(signin.dataset.signin);
+  const rank = e.target.closest("[data-rank]");
+  if (rank) return checkRank(rank.dataset.rank);
   const copy = e.target.closest("[data-copy]");
   if (copy) return copyToken(copy.dataset.copy);
   const remove = e.target.closest("[data-remove]");
