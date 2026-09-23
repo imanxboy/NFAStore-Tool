@@ -95,6 +95,9 @@ function rankArea(steamid) {
   }
   const cd = cooldownText(d.cooldownExpiresUnix);
   chips.push(`<span class="rank-chip ${cd.level}">${escapeHtml(cd.text)}</span>`);
+  // null = the VAC lookup did not resolve; only speak when we actually know.
+  if (d.vacBanned === true) chips.push('<span class="rank-chip gone">VAC banned</span>');
+  else if (d.vacBanned === false) chips.push('<span class="rank-chip ok">No VAC</span>');
   return `<div class="row-rank">${chips.join("")}</div>`;
 }
 

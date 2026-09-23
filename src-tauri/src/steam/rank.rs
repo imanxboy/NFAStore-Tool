@@ -33,6 +33,10 @@ struct Envelope {
     status: String,
     html: Option<String>,
     error: Option<String>,
+    /// VAC flag from the public profile, alongside the GCPD html. Absent or
+    /// null (lookup did not resolve) deserializes to None.
+    #[serde(rename = "vacBanned")]
+    vac_banned: Option<bool>,
 }
 
 pub(crate) fn fetch_rank(app: &AppHandle, token: &str) -> Result<Cs2Rank, String> {
@@ -77,10 +81,13 @@ fn parse_sidecar_output(stdout: &str, now: i64) -> Result<Cs2Rank, String> {
         .map_err(|_| "The rank helper returned something unreadable.".to_string())?;
 
     match envelope.status.as_str() {
-        "ok" => Ok(gcpd::parse_matchmaking(
-            &envelope.html.unwrap_or_default(),
-            now,
-        )),
+        "ok" => {
+            // Rank/cooldown come out of the page; VAC rides alongside it in the
+            // envelope, so it is merged in after the pure parse.
+            let mut rank = gcpd::parse_matchmaking(&envelope.html.unwrap_or_default(), now);
+            rank.vac_banned = envelope.vac_banned;
+            Ok(rank)
+        }
         // A dead token is worth telling apart from a hiccup: the account's token
         // is genuinely gone, so the reason is surfaced rather than a "try again".
         "dead" => Err(format!(
@@ -108,10 +115,22 @@ mod tests {
 
     #[test]
     fn ok_envelope_is_parsed_into_a_rank() {
-        let page = r#"{"status":"ok","html":"<table class=\"generic_kv_table\"><tr><th>Matchmaking Mode</th><th>Wins</th><th>Ties</th><th>Losses</th><th>Skill</th></tr><tr><td>Premier</td><td>640</td><td>0</td><td>4</td><td>21000</td></tr></table>"}"#;
+        let page = r#"{"status":"ok","vacBanned":false,"html":"<table class=\"generic_kv_table\"><tr><th>Matchmaking Mode</th><th>Wins</th><th>Ties</th><th>Losses</th><th>Skill</th></tr><tr><td>Premier</td><td>640</td><td>0</td><td>4</td><td>21000</td></tr></table>"}"#;
         let rank = parse_sidecar_output(page, 1_700_000_000).expect("ok status should parse");
         assert_eq!(rank.premier_rating, 21_000);
         assert_eq!(rank.premier_wins, 640);
+        assert_eq!(rank.vac_banned, Some(false));
+    }
+
+    #[test]
+    fn vac_ban_and_a_missing_vac_field_are_told_apart() {
+        let banned = parse_sidecar_output(r#"{"status":"ok","vacBanned":true,"html":""}"#, 0)
+            .expect("ok parses");
+        assert_eq!(banned.vac_banned, Some(true));
+
+        // No vacBanned key at all → unknown, not "clean".
+        let unknown = parse_sidecar_output(r#"{"status":"ok","html":""}"#, 0).expect("ok parses");
+        assert_eq!(unknown.vac_banned, None);
     }
 
     #[test]

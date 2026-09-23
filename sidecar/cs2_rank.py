@@ -27,6 +27,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import secrets
 import sys
 import urllib.error
@@ -34,6 +35,8 @@ import urllib.parse
 import urllib.request
 
 logger = logging.getLogger("cs2_rank")
+
+_VAC_RE = re.compile(r"<vacBanned>([01])</vacBanned>", re.IGNORECASE)
 
 _UM_METHOD = "Authentication.GenerateAccessTokenForApp#1"
 _PROTOCOL_VERSION = 65580
@@ -232,6 +235,29 @@ def fetch_gcpd_html(steamid: int, cookies: dict) -> str | None:
     return html
 
 
+def fetch_vac(steamid: int) -> bool | None:
+    """VAC ban flag from the public community profile XML.
+
+    VAC status is public — it needs no login and is not on the GCPD page, so it
+    is read separately here from `/profiles/<id>/?xml=1`, which every account
+    exposes whether or not the profile is private. None means the lookup did not
+    resolve (kept apart from a confirmed clean account).
+    """
+    url = f"https://steamcommunity.com/profiles/{steamid}/?xml=1"
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=_GCPD_TIMEOUT) as response:
+            body = response.read().decode("utf-8", "replace")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("VAC lookup failed: %s", exc)
+        return None
+    match = _VAC_RE.search(body)
+    if match is None:
+        logger.warning("VAC field not present in the profile XML")
+        return None
+    return match.group(1) == "1"
+
+
 def run(refresh_token: str) -> dict:
     """The whole flow, as a JSON-able envelope. Never raises."""
     try:
@@ -253,7 +279,7 @@ def run(refresh_token: str) -> dict:
     html = fetch_gcpd_html(steamid, cookies)
     if html is None:
         return {"status": "error", "error": "gcpd fetch failed"}
-    return {"status": "ok", "html": html}
+    return {"status": "ok", "html": html, "vacBanned": fetch_vac(steamid)}
 
 
 def main(argv: list[str]) -> int:

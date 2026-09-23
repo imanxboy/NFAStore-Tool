@@ -42,6 +42,9 @@ pub(crate) struct Cs2Rank {
     /// for a ban with no end.
     pub cooldown_expires_unix: i64,
     pub cooldown_reason: String,
+    /// VAC ban flag. Not on the GCPD page — filled in by the fetch layer from
+    /// the public profile, so it stays `None` after a pure parse.
+    pub vac_banned: Option<bool>,
 }
 
 impl Default for Cs2Rank {
@@ -53,6 +56,7 @@ impl Default for Cs2Rank {
             wingman_wins: -1,
             cooldown_expires_unix: 0,
             cooldown_reason: String::new(),
+            vac_banned: None,
         }
     }
 }
