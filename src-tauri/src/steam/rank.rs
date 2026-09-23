@@ -37,6 +37,10 @@ struct Envelope {
     /// null (lookup did not resolve) deserializes to None.
     #[serde(rename = "vacBanned")]
     vac_banned: Option<bool>,
+    /// CS2 profile rank (account level) from the Game Coordinator. Absent or
+    /// null (the GC did not answer) deserializes to None → shown as unknown.
+    #[serde(rename = "profileLevel")]
+    profile_level: Option<i64>,
 }
 
 pub(crate) fn fetch_rank(app: &AppHandle, token: &str) -> Result<Cs2Rank, String> {
@@ -86,6 +90,7 @@ fn parse_sidecar_output(stdout: &str, now: i64) -> Result<Cs2Rank, String> {
             // envelope, so it is merged in after the pure parse.
             let mut rank = gcpd::parse_matchmaking(&envelope.html.unwrap_or_default(), now);
             rank.vac_banned = envelope.vac_banned;
+            rank.profile_level = envelope.profile_level.unwrap_or(-1);
             Ok(rank)
         }
         // A dead token is worth telling apart from a hiccup: the account's token

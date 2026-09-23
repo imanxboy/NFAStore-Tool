@@ -42,6 +42,7 @@ import logging
 import os
 import re
 import secrets
+import struct
 import sys
 import threading
 import time
@@ -220,9 +221,173 @@ def _logon(client: SteamClient, token: str, steamid: int) -> int:
     return reply.body.eresult if reply else 0
 
 
+# ---- CS2 Game Coordinator: the account's Profile Rank (player_level) ----
+#
+# The GCPD web page carries Premier, Wingman and cooldown, but NOT the profile
+# rank (the "Major General Rank 37" the game shows). That number only comes from
+# the CS2 Game Coordinator, so — while the same logged-on CM session is open — we
+# ask the GC for the account's own profile and read player_level out of it.
+#
+# GC messages ride inside ordinary client messages (ClientToGC / ClientFromGC).
+# Each is [4B msgtype|proto-flag LE][4B header_len LE][proto header][proto body].
+# The message ids and the profile field numbers match the nfa.pub loader's, which
+# is the reference that this is known to work against a live CS2 GC.
+_GC_APP = 730
+_GC_HELLO = 4006  # k_EMsgGCClientHello
+_GC_WELCOME = 4004  # k_EMsgGCClientWelcome
+_MM_CLIENT2GC_HELLO = 9109
+_MM_GC2CLIENT_HELLO = 9110
+_REQ_PLAYERS_PROFILE = 9127
+_PLAYERS_PROFILE = 9128
+_CS_CLIENT_VERSION = 2_000_244
+_PROTO_MASK = 0x80000000
+_GC_DEADLINE = 15  # seconds; the reply usually lands within three
+
+
+def _wv(n: int) -> bytes:
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def _pv(field: int, value: int) -> bytes:
+    return _wv((field << 3) | 0) + _wv(value)
+
+
+def _pf64(field: int, value: int) -> bytes:
+    return _wv((field << 3) | 1) + struct.pack("<Q", value)
+
+
+def _read_varint(buf: bytes, i: int) -> tuple[int, int]:
+    shift = result = 0
+    while True:
+        b = buf[i]
+        i += 1
+        result |= (b & 0x7F) << shift
+        if not (b & 0x80):
+            return result, i
+        shift += 7
+
+
+def _iter_fields(buf: bytes):
+    i, n = 0, len(buf)
+    while i < n:
+        tag, i = _read_varint(buf, i)
+        field, wire = tag >> 3, tag & 7
+        if wire == 0:
+            val, i = _read_varint(buf, i)
+            yield field, val
+        elif wire == 2:
+            ln, i = _read_varint(buf, i)
+            yield field, buf[i:i + ln]
+            i += ln
+        elif wire == 1:
+            yield field, buf[i:i + 8]
+            i += 8
+        elif wire == 5:
+            yield field, buf[i:i + 4]
+            i += 4
+        else:  # groups are not used by these messages
+            return
+
+
+def _account_player_level(body: bytes) -> int | None:
+    """player_level (field 17) out of one CMsgGCCStrike15_v2 account profile."""
+    for field, val in _iter_fields(body):
+        if field == 17 and isinstance(val, int):
+            return val
+    return None
+
+
+def _gc_body(payload: bytes) -> bytes:
+    """Strip the inner GC proto header, leaving the message body."""
+    if len(payload) < 8:
+        return b""
+    header_len = struct.unpack("<i", payload[4:8])[0]
+    if header_len < 0 or len(payload) < 8 + header_len:
+        return b""
+    return payload[8 + header_len:]
+
+
+def _send_gc(client: SteamClient, steamid64: int, msgtype: int, body: bytes, jobid: int) -> None:
+    header = _pf64(1, steamid64) + _pv(3, _GC_APP) + _pf64(10, jobid)
+    packet = struct.pack("<I", msgtype | _PROTO_MASK) + struct.pack("<i", len(header)) + header + body
+    message = MsgProto(EMsg.ClientToGC)
+    message.body.appid = _GC_APP
+    message.body.msgtype = msgtype | _PROTO_MASK
+    message.body.payload = bytes(packet)
+    client.send(message)
+
+
+def _fetch_profile_level(client: SteamClient, steamid64: int) -> int | None:
+    """Best-effort profile rank for the logged-on account. Never raises — a
+    failure just means the level is unknown and the rest of the check stands."""
+    account_id = steamid64 & 0xFFFFFFFF
+    found: dict[str, int | None] = {"welcome": None, "level": None}
+
+    def on_gc(message):
+        try:
+            raw = message.body.msgtype & ~_PROTO_MASK
+            body = _gc_body(message.body.payload)
+            if raw == _GC_WELCOME:
+                found["welcome"] = 1
+            elif raw == _PLAYERS_PROFILE:
+                for field, val in _iter_fields(body):
+                    if field == 2 and isinstance(val, (bytes, bytearray)):
+                        level = _account_player_level(bytes(val))
+                        if level is not None:
+                            found["level"] = level
+            elif raw == _MM_GC2CLIENT_HELLO and found["level"] is None:
+                level = _account_player_level(body)
+                if level is not None:
+                    found["level"] = level
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        client.on(EMsg.ClientFromGC, on_gc)
+        client.games_played([_GC_APP])
+        gevent.sleep(1.0)
+
+        jobid = 1
+        deadline = time.monotonic() + _GC_DEADLINE
+        # Say hello until the GC welcomes us, then ask for our own profile.
+        for _ in range(6):
+            _send_gc(client, steamid64, _GC_HELLO, _pv(1, _CS_CLIENT_VERSION) + _pv(3, 0) + _pv(4, 0) + _pv(9, 0), jobid)
+            jobid += 1
+            gevent.sleep(1.2)
+            if found["welcome"] or time.monotonic() > deadline:
+                break
+
+        _send_gc(client, steamid64, _MM_CLIENT2GC_HELLO, b"", jobid)
+        jobid += 1
+        _send_gc(client, steamid64, _REQ_PLAYERS_PROFILE, _pv(3, account_id) + _pv(4, 32), jobid)
+
+        while found["level"] is None and time.monotonic() < deadline:
+            gevent.sleep(0.3)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("%s GC level fetch failed: %s", _elapsed(), exc)
+    finally:
+        try:
+            client.remove_listener(EMsg.ClientFromGC, on_gc)
+        except Exception:  # noqa: BLE001
+            pass
+
+    logger.info("%s profile level = %s", _elapsed(), found["level"])
+    return found["level"]
+
+
 def mint_web_cookies(refresh_token: str, steamid: int) -> dict | None:
-    """Return ``{"steamLoginSecure": ..., "sessionid": ...}`` or None on a
-    transient failure. Raises :class:`TokenRejected` when the token is dead.
+    """Return ``{"cookies": {...}, "level": int | None}`` or None on a transient
+    failure. Raises :class:`TokenRejected` when the token is dead. The profile
+    rank is read from the GC on the same session and is best-effort — None when
+    the GC did not answer in time.
 
     Non-destructive: the token logs on and mints a web access token with renewal
     not requested; if the mint hands back a rotated refresh token the result is
@@ -262,12 +427,15 @@ def mint_web_cookies(refresh_token: str, steamid: int) -> dict | None:
                     logger.warning("%s mint returned no access token", _elapsed())
                     return None
                 logger.info("%s cookie minted", _elapsed())
-                return {
+                cookies = {
                     "steamLoginSecure": urllib.parse.quote(
                         f"{steamid}||{access_token}", safe=""
                     ),
                     "sessionid": secrets.token_hex(12),
                 }
+                # Same session, still logged on: ask the GC for the profile rank.
+                level = _fetch_profile_level(client, SteamID(steamid).as_64)
+                return {"cookies": cookies, "level": level}
 
             logger.info("%s logon failed (eresult=%s)", _elapsed(), eresult)
             if eresult in _DEAD_ERESULTS:
@@ -342,23 +510,28 @@ def run(refresh_token: str) -> dict:
     vac_thread.start()
 
     try:
-        cookies = mint_web_cookies(token, steamid)
+        session = mint_web_cookies(token, steamid)
     except TokenRejected:
         return {"status": "dead", "error": "rejected"}
     except Exception:  # noqa: BLE001
         logger.exception("unexpected error during cookie mint")
         return {"status": "error", "error": "mint failed"}
 
-    if not cookies:
+    if not session:
         return {"status": "error", "error": "could not reach Steam"}
+
+    cookies = session["cookies"]
+    level = session["level"]
 
     html = fetch_gcpd_html(steamid, cookies)
     if html is None:
         return {"status": "error", "error": "gcpd fetch failed"}
 
     vac_thread.join(timeout=_HTTP_TIMEOUT)
-    logger.info("%s done — %d bytes, vac=%s", _elapsed(), len(html), vac.get("banned"))
-    return {"status": "ok", "html": html, "vacBanned": vac.get("banned")}
+    logger.info(
+        "%s done — %d bytes, vac=%s, level=%s", _elapsed(), len(html), vac.get("banned"), level
+    )
+    return {"status": "ok", "html": html, "vacBanned": vac.get("banned"), "profileLevel": level}
 
 
 def _log_file_path() -> str | None:

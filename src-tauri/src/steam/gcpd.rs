@@ -45,6 +45,10 @@ pub(crate) struct Cs2Rank {
     /// VAC ban flag. Not on the GCPD page — filled in by the fetch layer from
     /// the public profile, so it stays `None` after a pure parse.
     pub vac_banned: Option<bool>,
+    /// CS2 profile rank (account level 1..=40, the "Major General Rank 37" the
+    /// game shows). Not on the GCPD page either — the fetch layer reads it from
+    /// the Game Coordinator, so it stays `-1` (unknown) after a pure parse.
+    pub profile_level: i64,
 }
 
 impl Default for Cs2Rank {
@@ -57,6 +61,7 @@ impl Default for Cs2Rank {
             cooldown_expires_unix: 0,
             cooldown_reason: String::new(),
             vac_banned: None,
+            profile_level: -1,
         }
     }
 }

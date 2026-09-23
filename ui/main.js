@@ -171,7 +171,7 @@ function renderList() {
     .join("");
 }
 
-/** One stat box (Premier / Wingman) for the detail panel. */
+/** One stat box (Premier / CS2 Level) for the detail panel. */
 function statBox(label, state, value, note) {
   const known = state === "value";
   const valueClass = known ? "" : " dim";
@@ -197,24 +197,26 @@ function renderDetail() {
   const d = r && r.data;
   const loading = Boolean(r && r.loading);
 
-  // Premier / Wingman boxes.
+  // Premier / CS2 Level boxes. The left box is the account's Premier rating; the
+  // right box is its profile rank (the "Rank 37" the game shows), read from the
+  // Game Coordinator — more useful than Wingman, which most stock never touches.
   let premier;
-  let wingman;
+  let level;
   if (loading) {
     premier = statBox("Premier", "dim", "…", "Checking…");
-    wingman = statBox("Wingman", "dim", "…", "Checking…");
+    level = statBox("CS2 Level", "dim", "…", "Checking…");
   } else if (d) {
     premier =
       d.premierRating > 0
         ? statBox("Premier", "value", d.premierRating.toLocaleString("en-US"), "CS Rating")
         : statBox("Premier", "dim", "—", "No rating yet");
-    wingman =
-      d.wingmanRank > 0
-        ? statBox("Wingman", "value", String(d.wingmanRank), "Rank")
-        : statBox("Wingman", "dim", "—", "Unranked");
+    level =
+      d.profileLevel > 0
+        ? statBox("CS2 Level", "value", String(d.profileLevel), "Profile rank")
+        : statBox("CS2 Level", "dim", "—", "Not read");
   } else {
     premier = statBox("Premier", "dim", "—", "Not checked");
-    wingman = statBox("Wingman", "dim", "—", "Not checked");
+    level = statBox("CS2 Level", "dim", "—", "Not checked");
   }
 
   // Token comes from the stored token itself and needs no lookup.
@@ -239,7 +241,7 @@ function renderDetail() {
   const stats = streamer
     ? ""
     : `
-      <div class="stat-boxes">${premier}${wingman}</div>
+      <div class="stat-boxes">${premier}${level}</div>
       <div class="detail-rows">
         <div class="drow"><span class="drow-k">Token</span><span class="drow-v ${token.level}">${escapeHtml(token.text)}</span></div>
         <div class="drow"><span class="drow-k">Cooldown</span><span class="drow-v ${cooldown.level}">${escapeHtml(cooldown.text)}</span></div>
