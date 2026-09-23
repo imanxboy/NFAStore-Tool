@@ -40,3 +40,7 @@ out.txt
 
 # Tauri generated (regenerated on build)
 src-tauri/gen/
+
+# Python
+__pycache__/
+*.pyc
