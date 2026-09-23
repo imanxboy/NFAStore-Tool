@@ -69,8 +69,11 @@ def _elapsed() -> str:
 _VAC_RE = re.compile(r"<vacBanned>([01])</vacBanned>", re.IGNORECASE)
 _UM_METHOD = "Authentication.GenerateAccessTokenForApp#1"
 _HTTP_TIMEOUT = 20
-_CM_TAKE = 8
-_LOGON_TIMEOUT = 12
+# Keep the fan-out small: retrying many CMs only matters when one does not
+# answer, and hammering makes a rate limit worse. A short logon wait keeps a
+# non-answering CM from stalling the whole check.
+_CM_TAKE = 3
+_LOGON_TIMEOUT = 8
 
 # CM logon results that mean the refresh token itself is bad — the account can be
 # treated as dead: 5 InvalidPassword, 26 Revoked, 27 Expired, 63 AccountLogonDenied.
@@ -270,6 +273,11 @@ def mint_web_cookies(refresh_token: str, steamid: int) -> dict | None:
             if eresult in _DEAD_ERESULTS:
                 rejected = eresult
                 break  # a bad token will not recover on another CM
+            if eresult == 15:
+                # AccessDenied is consistent for this account right now (signed
+                # in, or logged on too often); another CM will only repeat it and
+                # deepen the rate limit, so stop and report it as transient.
+                break
         except Exception as exc:  # noqa: BLE001
             logger.warning("%s CM attempt error: %s", _elapsed(), exc)
         finally:
