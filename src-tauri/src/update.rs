@@ -95,7 +95,8 @@ pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
 /// TEMP is at risk of being mistaken for it.
 fn installer_path() -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join("NFAStore-Tool-update");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not prepare a download folder: {e}"))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Could not prepare a download folder: {e}"))?;
     Ok(dir.join("nfastore-tool-setup.exe"))
 }
 
@@ -151,11 +152,16 @@ fn download(app: &AppHandle, url: &str) -> Result<Vec<u8>, String> {
 
 /// Download the installer and start it.
 ///
-/// The app exits once the installer is running: NSIS has to replace the very
-/// executable this code lives in, and it cannot do that while we hold it open.
 /// The installer is given NSIS's passive flags so it puts up a progress bar and
 /// asks nothing — the prompt about removing the previous version is exactly
 /// what made the old route tiresome.
+///
+/// We exit shortly after spawning it, but not because the installer needs us
+/// to: measured against a real 1.2.0 install, its `CheckIfAppIsRunning` step
+/// finds this process and terminates it itself, skipping its own "close the
+/// app?" box because we passed `/P`. Leaving it to do that would mean being
+/// killed outright, possibly mid-write to accounts.json. Closing ourselves
+/// first turns that into an ordinary shutdown.
 pub(crate) fn download_and_install(app: &AppHandle, url: &str) -> Result<String, String> {
     if !url.starts_with(ALLOWED_PREFIX) {
         return Err("That download is not part of NFAStore Tool.".to_string());
@@ -188,8 +194,9 @@ pub(crate) fn download_and_install(app: &AppHandle, url: &str) -> Result<String,
     let handle = app.clone();
     std::thread::spawn(move || {
         // Long enough for the webview to paint the closing message, short
-        // enough that it does not look stuck. The installer is a separate
-        // process by now and outlives us either way.
+        // enough that it does not look stuck. Nothing depends on the exact
+        // figure: the installer waits on us for as long as it takes, and
+        // stops waiting by force if we never go.
         std::thread::sleep(std::time::Duration::from_millis(900));
         handle.exit(0);
     });
