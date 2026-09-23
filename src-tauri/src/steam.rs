@@ -2,6 +2,7 @@ mod account;
 mod config;
 mod crypto;
 mod downloads;
+mod gcpd;
 mod import;
 mod paths;
 mod process;
