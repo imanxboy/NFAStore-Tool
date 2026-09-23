@@ -30,6 +30,12 @@ pub fn fetch_cs2_rank(app: &AppHandle, token: &str) -> Result<Cs2Rank, String> {
     rank::fetch_rank(app, token)
 }
 
+/// Recover a login token Steam saved for an account signed in through the Steam
+/// client, so an account we hold no token of our own for can still be checked.
+pub fn recover_token(account_name: &str) -> Option<String> {
+    config::read_connect_cache_token(account_name)
+}
+
 pub fn import_from_clipboard() -> Result<String, String> {
     let content = read_clipboard()?;
     handle_batch_import(&content)

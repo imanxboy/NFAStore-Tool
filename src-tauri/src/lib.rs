@@ -153,16 +153,22 @@ fn clear_steam(app: AppHandle) -> Result<String, String> {
 async fn cs2_rank(app: AppHandle, steamid: String) -> Result<steam::Cs2Rank, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let account = find_account(&steamid)?;
+        // Prefer our own stored token; fall back to the one Steam saved for an
+        // account signed in through the client, so a token we never imported is
+        // still checkable.
         let token = account
             .token
             .as_deref()
             .map(str::trim)
             .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .or_else(|| steam::recover_token(&account.account_name))
             .ok_or_else(|| {
-                "No token is stored for this account. Import it again from your order page."
+                "No token is stored for this account, and Steam has no saved login for it either. \
+                 Import it from your order page, or sign in to it once in Steam."
                     .to_string()
             })?;
-        steam::fetch_cs2_rank(&app, token)
+        steam::fetch_cs2_rank(&app, &token)
     })
     .await
     .map_err(|e| format!("The rank lookup could not start: {e}"))?

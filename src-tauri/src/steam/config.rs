@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::settings::AppSettings;
 
-use super::crypto::{compute_crc32, steam_encrypt};
+use super::crypto::{compute_crc32, steam_decrypt, steam_encrypt};
 use super::paths::{local_steam_cache_path, localconfig_path, steamid64_to_steamid3};
 use super::vdf::{
     byte_offset_of_line, find_vdf_key_block_body_start, line_indent, quoted_fields,
@@ -485,6 +485,53 @@ fn create_new_local_vdf(crc: &str, encrypted: &str) -> String {
 }}
 "#
     )
+}
+
+/// Recover the login token Steam itself saved for an account that was signed in
+/// through the Steam client, out of `local.vdf`'s ConnectCache. Returns None
+/// when there is no entry, or it cannot be opened (a blob sealed by another
+/// Windows user or on another PC will not decrypt — which is the point). This is
+/// what lets an account we hold no token for, but which the user has signed into
+/// in Steam, still be rank-checked.
+pub(crate) fn read_connect_cache_token(account_name: &str) -> Option<String> {
+    if account_name.is_empty() {
+        return None;
+    }
+    let crc = compute_crc32(account_name);
+    let path = local_steam_cache_path().ok()?.join("local.vdf");
+    let content = fs::read_to_string(&path).ok()?;
+
+    let mut in_connect_cache = false;
+    let mut encrypted: Option<String> = None;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "\"ConnectCache\"" {
+            in_connect_cache = true;
+            continue;
+        }
+        if in_connect_cache {
+            let fields = quoted_fields(line);
+            if fields.len() >= 2 && fields[0] == crc {
+                encrypted = Some(fields[1].clone());
+                break;
+            }
+            // The first close-brace ends the ConnectCache block; the entry is
+            // not there, so stop rather than scanning the rest of the file.
+            if trimmed == "}" {
+                break;
+            }
+        }
+    }
+
+    let token = steam_decrypt(&encrypted?, account_name).ok()?;
+    let token = token.trim().to_string();
+    // A refresh token is a three-part JWT; guard against a decrypt that
+    // "succeeded" into something that is not one.
+    if token.matches('.').count() >= 2 && token.len() > 20 {
+        Some(token)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn apply_localconfig_settings(

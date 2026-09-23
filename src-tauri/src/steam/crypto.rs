@@ -66,6 +66,60 @@ pub(crate) fn steam_encrypt(token: &str, account_name: &str) -> Result<String, S
     }
 }
 
+/// Reverse of [`steam_encrypt`]: recover a token Steam saved in its own
+/// ConnectCache. Steam sealed it with DPAPI under the current Windows user and
+/// the account name as entropy, so the same user — which is who this app runs as
+/// — can open it. This is how an account that was signed in through the Steam
+/// client, and so has no token of ours, still gets a token to check its rank.
+pub(crate) fn steam_decrypt(encrypted_hex: &str, account_name: &str) -> Result<String, String> {
+    let hex = encrypted_hex.trim();
+    if hex.is_empty() || hex.len() % 2 != 0 {
+        return Err("ConnectCache value is not valid hex.".to_string());
+    }
+    let bytes = hex.as_bytes();
+    let mut raw = Vec::with_capacity(hex.len() / 2);
+    let mut i = 0;
+    while i < bytes.len() {
+        let hi = (bytes[i] as char)
+            .to_digit(16)
+            .ok_or("ConnectCache value is not valid hex.")?;
+        let lo = (bytes[i + 1] as char)
+            .to_digit(16)
+            .ok_or("ConnectCache value is not valid hex.")?;
+        raw.push(((hi << 4) | lo) as u8);
+        i += 2;
+    }
+
+    let account_name_bytes = account_name.as_bytes();
+    let data_in = CRYPT_INTEGER_BLOB {
+        cbData: raw.len() as u32,
+        pbData: raw.as_ptr() as *mut u8,
+    };
+    let entropy = CRYPT_INTEGER_BLOB {
+        cbData: account_name_bytes.len() as u32,
+        pbData: account_name_bytes.as_ptr() as *mut u8,
+    };
+    let mut data_out = CRYPT_INTEGER_BLOB::default();
+
+    unsafe {
+        CryptUnprotectData(
+            &data_in,
+            None,
+            Some(&entropy),
+            None,
+            None,
+            UI_FORBIDDEN,
+            &mut data_out,
+        )
+        .map_err(|_| "CryptUnprotectData failed".to_string())?;
+
+        let slice = std::slice::from_raw_parts(data_out.pbData, data_out.cbData as usize);
+        let plain = String::from_utf8_lossy(slice).into_owned();
+        local_free(data_out.pbData);
+        Ok(plain)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // At-rest protection for our own account store.
 //
@@ -178,6 +232,20 @@ mod tests {
     fn rejects_garbage() {
         assert!(unprotect_for_user("not base64 at all !!").is_err());
         assert!(unprotect_for_user("aGVsbG8gd29ybGQ=").is_err());
+    }
+
+    #[test]
+    fn steam_encrypt_round_trips() {
+        // What we write into Steam's ConnectCache we must be able to read back,
+        // so an account signed in through Steam can be rank-checked. The entropy
+        // is the account name — a different name must not open the blob.
+        let token = "eyJ0eXAiOiJKV1QifQ.eyJzdWIiOiI3NjU2MTE5OTAwMDAwMDAwMCJ9.sig";
+        let name = "some_account";
+        let sealed = steam_encrypt(token, name).expect("encrypt");
+        assert_ne!(sealed, token);
+        assert_eq!(steam_decrypt(&sealed, name).expect("decrypt"), token);
+        assert!(steam_decrypt(&sealed, "other_account").is_err());
+        assert!(steam_decrypt("nothex", name).is_err());
     }
 }
 

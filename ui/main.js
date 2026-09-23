@@ -151,12 +151,25 @@ function renderList() {
       const view = displayAccount(acc, index);
       const tag = acc.most_recent ? '<span class="li-tag">Last used</span>' : "";
       const selected = acc.steamid === selectedSteamid ? " selected" : "";
-      // A checked account carries its cooldown as a hint, unless on stream.
+      // A checked account carries its status as a hint, unless on stream:
+      // whether it signs in (and any cooldown), or that its token is gone.
       const r = ranks[acc.steamid];
       let hint = "";
-      if (!settings.streamer_mode && r && r.data) {
-        const cd = cooldownText(r.data.cooldownExpiresUnix);
-        hint = `<span class="li-hint ${cd.level}">${escapeHtml(cd.text)}</span>`;
+      if (!settings.streamer_mode && r) {
+        if (r.loading) {
+          hint = `<span class="li-hint dim">Checking…</span>`;
+        } else if (r.error) {
+          const dead = /no longer valid|no token is stored|no saved login/i.test(r.error);
+          hint = `<span class="li-hint gone">${dead ? "Token expired" : "Check failed"}</span>`;
+        } else if (r.data) {
+          const cd = cooldownText(r.data.cooldownExpiresUnix);
+          // A successful check means the token signed in; show a cooldown or ban
+          // when there is one, otherwise a plain confirmation.
+          hint =
+            cd.level === "ok"
+              ? `<span class="li-hint ok">Signs in</span>`
+              : `<span class="li-hint ${cd.level}">${escapeHtml(cd.text)}</span>`;
+        }
       }
       return `
         <button class="li${selected}" data-select="${escapeAttr(acc.steamid)}">
@@ -381,6 +394,46 @@ async function checkRank(steamid) {
   render();
 }
 
+let checkingAll = false;
+
+/**
+ * Check every account in turn — the "which of these still sign in?" pass.
+ *
+ * Sequential on purpose: each check is a real Steam logon, and firing ten at
+ * once invites a rate limit that makes good tokens look dead. The footer button
+ * counts progress; each row shows its own result as it lands. Accounts with no
+ * token of ours fall back to the one Steam saved, so a signed-in account with no
+ * imported token is checked too.
+ */
+async function checkAll() {
+  if (checkingAll) return;
+  const ids = accounts.map((a) => a.steamid);
+  if (ids.length === 0) return;
+  checkingAll = true;
+  const btn = el("checkAllBtn");
+  if (btn) btn.disabled = true;
+  try {
+    for (let i = 0; i < ids.length; i++) {
+      const steamid = ids[i];
+      if (btn) btn.textContent = `Checking ${i + 1}/${ids.length}…`;
+      ranks[steamid] = { loading: true };
+      render();
+      try {
+        ranks[steamid] = { data: await invoke("cs2_rank", { steamid }) };
+      } catch (e) {
+        ranks[steamid] = { error: formatError(e) };
+      }
+      render();
+    }
+  } finally {
+    checkingAll = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Check all";
+    }
+  }
+}
+
 function askRemove(steamid) {
   const idx = accounts.findIndex((a) => a.steamid === steamid);
   const acc = accounts[idx];
@@ -586,6 +639,7 @@ el("emptyImportBtn").addEventListener("click", openImport);
 el("pasteBtn").addEventListener("click", pasteIntoImport);
 el("refreshBtn").addEventListener("click", () => refresh());
 el("doImportBtn").addEventListener("click", importManual);
+el("checkAllBtn").addEventListener("click", () => checkAll());
 el("dangerBtn").addEventListener("click", askClearSteam);
 el("settingsBtn").addEventListener("click", openSettings);
 el("updateBtn").addEventListener("click", checkForUpdates);
