@@ -23,9 +23,17 @@ jobs:
             src-tauri/target
           key: ${{ runner.os }}-cargo-ci-${{ hashFiles('src-tauri/Cargo.lock') }}
 
-      - name: Clippy
+      # TEMPORARY: regenerates Cargo.lock for a newly added dependency and
+      # hands it back, because this project is developed on a machine with no
+      # cargo. Reverted in the next commit, together with --locked below.
+      - name: Refresh lockfile
         working-directory: src-tauri
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock
+          path: src-tauri/Cargo.lock
 
       - name: Test
         working-directory: src-tauri

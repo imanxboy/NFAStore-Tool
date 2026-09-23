@@ -274,25 +274,41 @@ const INSTALLER_URL = `https://github.com/${REPO}/releases/latest/download/nfast
 let pendingUpdateUrl = null;
 
 /**
- * The check runs here rather than in Rust on purpose.
+ * The check runs here rather than in Rust on purpose: it is one small JSON call
+ * and keeping it here lets the button name the new version before anything is
+ * downloaded. The download and the install are Rust's, in `install_update`.
  *
- * api.github.com is reachable from Iran without a VPN; the host the installer
- * actually lives on is not (measured: zero bytes in 20s direct, 64KB in 1.5s
- * through a VPN). So the app finds out about the update itself and hands the
- * download to the browser, which already has whatever the customer uses for the
- * rest of GitHub.
+ * Two presses, deliberately. The first says what is available, the second
+ * commits to it — an update that starts installing the moment you ask "is there
+ * one?" is not a question, it is a surprise.
  */
 async function checkForUpdates() {
   const btn = el("updateBtn");
   const status = el("updateStatus");
 
   if (pendingUpdateUrl) {
+    btn.disabled = true;
+    status.classList.remove("is-error");
+    status.textContent = "Downloading…";
+
     try {
-      await invoke("open_release_link", { url: pendingUpdateUrl });
-      status.textContent = "Opened in your browser. Run the installer when it finishes.";
+      // Rust downloads, checks the file really is an installer, runs it and
+      // closes the app. Nothing after this line is expected to matter.
+      status.textContent = await invoke("install_update", { url: pendingUpdateUrl });
+      return;
     } catch (e) {
-      status.textContent = formatError(e);
+      // GitHub's download host is the one part that is unreachable from here
+      // without a VPN. When it will not come through, the browser still can —
+      // so the button becomes that instead of just reporting a failure.
+      status.textContent = `${formatError(e)} Opening your browser instead…`;
       status.classList.add("is-error");
+      try {
+        await invoke("open_release_link", { url: pendingUpdateUrl });
+      } catch {
+        status.textContent = `${formatError(e)} Download it from the site instead.`;
+      }
+    } finally {
+      btn.disabled = false;
     }
     return;
   }
@@ -323,7 +339,7 @@ async function checkForUpdates() {
     if (available) {
       pendingUpdateUrl = INSTALLER_URL;
       status.textContent = `Version ${latest.replace(/^v/i, "")} is available.`;
-      btn.textContent = "Download";
+      btn.textContent = "Update now";
       btn.classList.add("is-update");
     } else {
       status.textContent = "You are on the latest version.";
@@ -453,6 +469,15 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "Enter" && !importModal.classList.contains("hidden")) {
     if (e.ctrlKey || e.target === importInput) importManual();
+  }
+});
+
+listen("update-progress", (e) => {
+  const status = el("updateStatus");
+  // Only while the download is the thing on screen: a late event must not
+  // overwrite the message that replaced it.
+  if (status.textContent.startsWith("Downloading")) {
+    status.textContent = `Downloading… ${e.payload}%`;
   }
 });
 

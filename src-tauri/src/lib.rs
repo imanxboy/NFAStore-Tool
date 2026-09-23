@@ -118,10 +118,25 @@ fn is_update_available(latest: String) -> bool {
     update::is_newer(&latest, &update::current_version())
 }
 
-/// Open a release link in the customer's browser, which is where their VPN is.
+/// Open a release link in the customer's browser.
+///
+/// Kept as the fallback for when the in-app download will not go through: the
+/// browser has whatever proxy or VPN the customer already uses for GitHub.
 #[tauri::command]
 fn open_release_link(url: String) -> Result<(), String> {
     update::open_link(&url)
+}
+
+/// Fetch the new installer and run it.
+///
+/// Off the async runtime: the download blocks, and blocking Tauri's runtime
+/// would freeze every other command — including the ones the UI needs to keep
+/// drawing progress.
+#[tauri::command]
+async fn install_update(app: AppHandle, url: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || update::download_and_install(&app, &url))
+        .await
+        .map_err(|e| format!("The update could not be started: {e}"))?
 }
 
 #[tauri::command]
@@ -160,6 +175,7 @@ pub fn run() {
             app_version,
             is_update_available,
             open_release_link,
+            install_update,
             clear_steam,
             get_settings,
             save_settings

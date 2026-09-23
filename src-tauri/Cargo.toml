@@ -1,6 +1,6 @@
 [package]
 name = "nfastore-tool"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2021"
 description = "NFAStore Tool — Steam cache login for nfastore.org"
 authors = ["NFAStore <nfastore.org>"]
@@ -22,6 +22,10 @@ base64 = "0.22"
 clipboard = "0.5"
 crc32fast = "1.4"
 winreg = "0.52"
+# Blocking HTTP for the in-app updater. Small, and its rustls feature carries
+# its own root certificates, so the download does not depend on the machine's
+# certificate store being healthy.
+ureq = "2"
 
 [dependencies.windows]
 version = "0.56"
