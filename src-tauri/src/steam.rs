@@ -152,7 +152,10 @@ pub fn handle_copy_token(account: &SteamAccount) -> Result<String, String> {
                 .to_string()
         })?;
 
-    write_clipboard(token)?;
+    // Copy as `steamid----token`, the delivery/order-line format. A bare JWT
+    // signs in here (Import accepts it), but other loaders and a friend's tool
+    // expect the steamid prefix, so the portable form is the one to hand out.
+    write_clipboard(&format!("{}----{}", account.steamid, token))?;
     Ok("Login token copied to the clipboard.".to_string())
 }
 

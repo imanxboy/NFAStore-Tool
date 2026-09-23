@@ -27,15 +27,26 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 logger = logging.getLogger("cs2_rank")
+
+# Wall-clock start, so each log line can show seconds since launch. This is a
+# diagnostic aid: the app runs this frozen, and the log on disk is the only way
+# to see where a slow or failed check spent its time.
+_START = time.monotonic()
+
+
+def _elapsed() -> str:
+    return f"+{time.monotonic() - _START:5.1f}s"
 
 _VAC_RE = re.compile(r"<vacBanned>([01])</vacBanned>", re.IGNORECASE)
 
@@ -146,11 +157,14 @@ def mint_web_cookies(refresh_token: str) -> dict | None:
         resp = None
         rejected = None
         for attempt in range(1, _CM_ATTEMPTS + 1):
+            logger.info("%s attempt %d: connecting to a CM", _elapsed(), attempt)
             if not client.connected and client.connect() is None:
-                logger.info("attempt %d: could not connect to a CM", attempt)
+                logger.info("%s attempt %d: could not connect to a CM", _elapsed(), attempt)
                 continue
+            logger.info("%s attempt %d: connected, logging on", _elapsed(), attempt)
             reply = _token_logon(client, token, steamid)
             if reply is not None and reply.body.eresult == EResult.OK:
+                logger.info("%s attempt %d: logon OK", _elapsed(), attempt)
                 resp = reply
                 break
             reason = (
@@ -158,7 +172,7 @@ def mint_web_cookies(refresh_token: str) -> dict | None:
                 if reply is not None and reply.body.eresult in EResult._value2member_map_
                 else "no response"
             )
-            logger.info("attempt %d: logon failed (%s)", attempt, reason)
+            logger.info("%s attempt %d: logon failed (%s)", _elapsed(), attempt, reason)
             try:
                 client.disconnect()
             except Exception:  # noqa: BLE001
@@ -266,6 +280,8 @@ def run(refresh_token: str) -> dict:
     except Exception:  # noqa: BLE001
         return {"status": "error", "error": "bad token"}
 
+    logger.info("%s check start for %s", _elapsed(), steamid)
+
     # VAC is public and independent of the logon, so fetch it on its own thread
     # while the slow part — the CM logon and the GCPD read — runs. It uses plain
     # urllib on a separate OS thread, so it overlaps the main thread's gevent
@@ -279,27 +295,54 @@ def run(refresh_token: str) -> dict:
     try:
         cookies = mint_web_cookies(refresh_token)
     except TokenRejected as rejected:
+        logger.warning("%s token rejected (%s) — account is dead", _elapsed(), rejected.eresult)
         return {"status": "dead", "error": rejected.eresult}
     except Exception:  # noqa: BLE001
         logger.exception("unexpected error during cookie mint")
         return {"status": "error", "error": "mint failed"}
 
     if not cookies or not cookies.get("steamLoginSecure"):
+        logger.warning("%s cookie mint failed", _elapsed())
         return {"status": "error", "error": "cookie mint failed"}
+    logger.info("%s cookie minted", _elapsed())
 
     html = fetch_gcpd_html(steamid, cookies)
     if html is None:
+        logger.warning("%s GCPD fetch failed", _elapsed())
         return {"status": "error", "error": "gcpd fetch failed"}
 
     vac_thread.join(timeout=_GCPD_TIMEOUT)
+    logger.info("%s done — %d bytes, vac=%s", _elapsed(), len(html), vac.get("banned"))
     return {"status": "ok", "html": html, "vacBanned": vac.get("banned")}
 
 
+def _log_file_path() -> str | None:
+    """A log beside the app's own data (%APPDATA%\\ir.nfastore.tool), so a slow
+    or failed check leaves a trace the customer can send back."""
+    base = os.environ.get("APPDATA")
+    if not base:
+        return None
+    folder = os.path.join(base, "ir.nfastore.tool")
+    try:
+        os.makedirs(folder, exist_ok=True)
+        return os.path.join(folder, "cs2-rank.log")
+    except OSError:
+        return None
+
+
 def main(argv: list[str]) -> int:
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    log_path = _log_file_path()
+    if log_path:
+        try:
+            handlers.append(logging.FileHandler(log_path, encoding="utf-8"))
+        except OSError:
+            pass
     logging.basicConfig(
         level=logging.INFO,
-        stream=sys.stderr,
-        format="cs2-rank: %(message)s",
+        handlers=handlers,
+        format="%(asctime)s %(message)s",
+        datefmt="%H:%M:%S",
     )
 
     # A network-free check that the frozen exe runs and its imports resolve; used
