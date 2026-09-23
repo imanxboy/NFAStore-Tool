@@ -83,6 +83,17 @@ pub fn load_steam_accounts() -> Result<Vec<SteamAccount>, String> {
         }
     }
 
+    // Accounts signed in through the Steam client have no token of ours. Recover
+    // the one Steam saved for them from its own ConnectCache, so their token
+    // expiry, Copy token and the rank check all work the same as an imported
+    // account's — not just the rank check.
+    for account in &mut accounts {
+        let has_token = account.token.as_deref().is_some_and(|t| !t.is_empty());
+        if !has_token && !account.account_name.is_empty() {
+            account.token = super::config::read_connect_cache_token(&account.account_name);
+        }
+    }
+
     for account in &mut accounts {
         account.avatar_path = find_avatar_path(steam_path, account);
     }
