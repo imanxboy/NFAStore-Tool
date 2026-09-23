@@ -144,6 +144,30 @@ fn clear_steam(app: AppHandle) -> Result<String, String> {
     finish_account_op(&app, steam::handle_clear_steam())
 }
 
+/// Read an account's CS2 Premier / Wingman rank and competitive cooldown.
+///
+/// Off the async runtime because the helper it drives blocks on a Steam logon
+/// and an HTTP fetch; running that on Tauri's runtime would stall every other
+/// command while it waited.
+#[tauri::command]
+async fn cs2_rank(app: AppHandle, steamid: String) -> Result<steam::Cs2Rank, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let account = find_account(&steamid)?;
+        let token = account
+            .token
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| {
+                "No token is stored for this account. Import it again from your order page."
+                    .to_string()
+            })?;
+        steam::fetch_cs2_rank(&app, token)
+    })
+    .await
+    .map_err(|e| format!("The rank lookup could not start: {e}"))?
+}
+
 #[tauri::command]
 fn get_settings() -> settings::AppSettings {
     settings::load_settings()
@@ -177,6 +201,7 @@ pub fn run() {
             open_release_link,
             install_update,
             clear_steam,
+            cs2_rank,
             get_settings,
             save_settings
         ])

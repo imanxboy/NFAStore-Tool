@@ -6,6 +6,7 @@ mod gcpd;
 mod import;
 mod paths;
 mod process;
+mod rank;
 mod tokens;
 mod vdf;
 
@@ -13,13 +14,21 @@ pub use account::{load_steam_accounts, SteamAccount};
 pub use import::read_clipboard;
 // Crate-internal, so it is re-exported as such: `pub use` on a
 // `pub(crate)` item is a compile error, not a widening.
+pub(crate) use gcpd::Cs2Rank;
 pub(crate) use import::expiry_from_jwt;
 use import::write_clipboard;
 
 use std::path::Path;
 use std::time::Duration;
 
+use tauri::AppHandle;
+
 use crate::settings::{load_settings, AppSettings};
+
+/// Read an account's CS2 rank and cooldown by running the bundled sidecar.
+pub fn fetch_cs2_rank(app: &AppHandle, token: &str) -> Result<Cs2Rank, String> {
+    rank::fetch_rank(app, token)
+}
 
 pub fn import_from_clipboard() -> Result<String, String> {
     let content = read_clipboard()?;

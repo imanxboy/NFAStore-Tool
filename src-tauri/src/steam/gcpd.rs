@@ -16,9 +16,8 @@
 //! set as small as it already is.
 //!
 //! The fetch that produces the HTML — a non-destructive CM logon that mints a
-//! read-only web cookie — lands as a separate step; until it is wired, these
-//! items have no caller outside the tests, hence the module-wide allow.
-#![allow(dead_code)]
+//! read-only web cookie — is done by a bundled sidecar (see `steam/rank.rs`);
+//! this module is only ever handed the resulting page.
 
 use serde::Serialize;
 
@@ -55,34 +54,6 @@ impl Default for Cs2Rank {
             cooldown_expires_unix: 0,
             cooldown_reason: String::new(),
         }
-    }
-}
-
-impl Cs2Rank {
-    pub fn has_premier(&self) -> bool {
-        self.premier_rating > 0
-    }
-
-    pub fn has_wingman(&self) -> bool {
-        self.wingman_rank > 0
-    }
-
-    /// Seconds left on the cooldown at `now`, or `0` if there is none / it has
-    /// already cleared. A permanent ban reports its full remaining span rather
-    /// than a special value; the caller decides how to label it.
-    pub fn cooldown_remaining_secs(&self, now: i64) -> i64 {
-        if self.cooldown_expires_unix <= 0 {
-            return 0;
-        }
-        (self.cooldown_expires_unix - now).max(0)
-    }
-
-    pub fn is_on_cooldown(&self, now: i64) -> bool {
-        self.cooldown_remaining_secs(now) > 0
-    }
-
-    pub fn is_permanent_cooldown(&self) -> bool {
-        self.cooldown_expires_unix == COOLDOWN_PERMANENT
     }
 }
 
@@ -194,14 +165,6 @@ fn parse_matchmaking_table(header: &[String], table: &[Vec<String>], out: &mut C
             }
         }
     }
-}
-
-pub(crate) fn looks_like_login_page(html: &str) -> bool {
-    ci_contains(html, "g_steamID = false") || ci_contains(html, "<title>Sign In")
-}
-
-pub(crate) fn looks_like_gcpd_page(html: &str) -> bool {
-    ci_contains(html, "generic_kv_table") || ci_contains(html, "Personal Game Data")
 }
 
 // --- HTML scanning, no regex ------------------------------------------------
@@ -465,7 +428,6 @@ mod tests {
         assert_eq!(rank.premier_wins, 1_234);
         assert_eq!(rank.wingman_rank, 11);
         assert_eq!(rank.wingman_wins, 88);
-        assert!(rank.has_premier() && rank.has_wingman());
         assert_eq!(rank.cooldown_expires_unix, 0);
     }
 
@@ -484,7 +446,6 @@ mod tests {
         );
         let rank = parse_matchmaking(&page, 1_893_000_000);
         assert_eq!(rank.cooldown_expires_unix, 1_893_456_000); // the 2030 one
-        assert!(rank.is_on_cooldown(1_893_000_000));
         assert_eq!(rank.cooldown_reason, "Competitive cooldown");
     }
 
@@ -493,15 +454,13 @@ mod tests {
         let page = page_with_cooldown("<tr><td>2000-01-01 00:00:00</td><td>1</td></tr>");
         let rank = parse_matchmaking(&page, 1_893_000_000);
         assert_eq!(rank.cooldown_expires_unix, 0);
-        assert!(!rank.is_on_cooldown(1_893_000_000));
     }
 
     #[test]
     fn a_countless_text_row_is_a_permanent_ban() {
         let page = page_with_cooldown("<tr><td>Permanent</td><td>3</td></tr>");
         let rank = parse_matchmaking(&page, 1_893_000_000);
-        assert!(rank.is_permanent_cooldown());
-        assert!(rank.is_on_cooldown(1_893_000_000));
+        assert_eq!(rank.cooldown_expires_unix, COOLDOWN_PERMANENT);
     }
 
     #[test]
@@ -538,15 +497,6 @@ mod tests {
         let rank = parse_matchmaking(page, 1_700_000_000);
         assert_eq!(rank.premier_rating, -1); // skill 0 is not a rating
         assert_eq!(rank.premier_wins, 0); // but zero wins is a real count
-        assert!(!rank.has_premier());
-    }
-
-    #[test]
-    fn a_sign_in_page_is_recognised() {
-        let html =
-            "<html><head><title>Sign In</title></head><body>g_steamID = false;</body></html>";
-        assert!(looks_like_login_page(html));
-        assert!(!looks_like_gcpd_page(html));
     }
 
     #[test]

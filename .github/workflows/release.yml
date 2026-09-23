@@ -39,6 +39,12 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -106,6 +112,26 @@ jobs:
           foreach ($icon in @("src-tauri/icons/32x32.png", "src-tauri/icons/128x128.png", "src-tauri/icons/icon.ico")) {
             if (-not (Test-Path $icon)) { Write-Error "Missing icon: $icon"; exit 1 }
           }
+
+      - name: Build rank sidecar (PyInstaller)
+        shell: pwsh
+        run: |
+          # Freeze sidecar/cs2_rank.py to the exe Tauri bundles as a resource. It
+          # must exist before "Build app" or generate_context! fails on a missing
+          # resource. --selftest proves the steam library actually bundled, so a
+          # broken freeze fails here rather than on a customer's machine.
+          python -m pip install --upgrade pip
+          pip install -r sidecar/requirements.txt pyinstaller
+          pyinstaller --onefile --name cs2-rank-sidecar --console --clean --noconfirm `
+            --collect-submodules steam --collect-submodules gevent `
+            --distpath src-tauri/binaries --workpath build/sidecar --specpath build/sidecar `
+            sidecar/cs2_rank.py
+          if (-not (Test-Path src-tauri/binaries/cs2-rank-sidecar.exe)) {
+            Write-Error "Sidecar build produced no exe"; exit 1
+          }
+          $out = & src-tauri/binaries/cs2-rank-sidecar.exe --selftest
+          if ($out -notmatch 'selftest-ok') { Write-Error "Sidecar selftest failed: $out"; exit 1 }
+          Write-Host "Sidecar built and self-tested: $out"
 
       - name: Build app (Tauri)
         run: npm run build

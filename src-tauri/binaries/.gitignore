@@ -1,0 +1,4 @@
+# The frozen sidecar is a build artifact — produced by the release/build
+# pipeline (PyInstaller), never committed. Keep the folder, ignore the binary.
+*
+!.gitignore

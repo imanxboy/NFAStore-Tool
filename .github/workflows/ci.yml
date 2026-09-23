@@ -23,6 +23,16 @@ jobs:
             src-tauri/target
           key: ${{ runner.os }}-cargo-ci-${{ hashFiles('src-tauri/Cargo.lock') }}
 
+      - name: Stub the rank sidecar
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          # generate_context! only checks that the resource path exists; the
+          # sidecar is never executed by clippy or the tests (parse_sidecar_output
+          # is pure). The real exe is built by the release workflow, so an empty
+          # placeholder is all these jobs need.
+          New-Item -ItemType File -Force -Path binaries/cs2-rank-sidecar.exe | Out-Null
+
       - name: Clippy
         working-directory: src-tauri
         run: cargo clippy --all-targets --locked -- -D warnings
