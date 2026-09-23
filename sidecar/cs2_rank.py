@@ -2,26 +2,38 @@
 #
 # NFAStore Tool — CS2 rank/cooldown fetch sidecar.
 #
-# Given a refresh token for an account we hold, this fetches that account's OWN
+# Given a refresh token for an account we hold, this reads that account's OWN
 # "Game Coordinator Player Data" page from Steam and hands the HTML back to the
 # Rust side, which parses it (see src-tauri/src/steam/gcpd.rs). The page is the
-# one Steam renders for the account's own owner — the same rank/cooldown table
-# the account holder sees on the website — so the tool can show the state of the
-# stock it already holds.
+# one Steam renders for the account's own owner, so it shows the same rank and
+# cooldown the account holder sees on the website.
 #
-# It is bundled as a standalone .exe by PyInstaller and invoked by the app with
-# the token on STDIN (never argv — argv is readable by other processes). Its only
-# output on STDOUT is one JSON line; all logging goes to STDERR.
+# HOW IT REACHES STEAM. To read that page it first needs a web session, which is
+# minted from the refresh token — and that mint (Authentication.
+# GenerateAccessTokenForApp) only works over an authenticated Steam CM session,
+# not a bare HTTPS call. Steam's CM over TCP is filtered on some connections
+# (e.g. from Iran) while its WebSocket CM — which looks like ordinary HTTPS — is
+# not. So this connects to the WebSocket CM (wss://.../cmsocket/), the way the
+# nfa.pub loader does, and lets ValvePython's `steam` library do the protocol.
 #
-# SAFETY, load-bearing and matching the rule already enforced elsewhere in this
-# tool: the refresh token is used ONLY for a CM logon and to mint a *web* access
-# token with renewal disabled. It is NEVER rotated or consumed — this never sets
-# a renewal flag and never calls /jwt/finalizelogin or any token-killing HTTP
-# endpoint. The mint below asserts that the CM did not hand back a rotated token
-# and aborts if it somehow did. This logic is ported from WareStore's
-# cs2_cm_mint.py / gcpd_scrape_gateway.py (GPL-3.0).
+# The library only speaks TCP, so this supplies a WebSocket transport for it
+# (WsConnection) and, because the WebSocket is already TLS-encrypted, tells the
+# library the channel is secure without the AES handshake (channel_secured=True,
+# no channel_key → messages travel plain inside the TLS frame). The logon fields
+# match the loader's exactly; Steam rejects the logon otherwise.
+#
+# SAFETY, matching the rule held elsewhere: the refresh token is used only to log
+# on and to mint a *web* access token with renewal not requested, so it is never
+# rotated or consumed; the mint is abandoned if it ever returns a new refresh
+# token. The token is read on STDIN (never argv). One JSON line goes to STDOUT.
 
 from __future__ import annotations
+
+# gevent must patch the standard library before anything imports socket/ssl, so
+# websocket-client's blocking calls cooperate with the library's greenlets.
+from gevent import monkey
+
+monkey.patch_all()
 
 import base64
 import hashlib
@@ -37,41 +49,106 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import gevent
+import websocket
+from steam.client import SteamClient
+from steam.core.connection import Connection
+from steam.core.msg import MsgProto
+from steam.enums.emsg import EMsg
+from steam.steamid import SteamID
+
 logger = logging.getLogger("cs2_rank")
 
-# Wall-clock start, so each log line can show seconds since launch. This is a
-# diagnostic aid: the app runs this frozen, and the log on disk is the only way
-# to see where a slow or failed check spent its time.
 _START = time.monotonic()
 
 
 def _elapsed() -> str:
     return f"+{time.monotonic() - _START:5.1f}s"
 
+
 _VAC_RE = re.compile(r"<vacBanned>([01])</vacBanned>", re.IGNORECASE)
-
 _UM_METHOD = "Authentication.GenerateAccessTokenForApp#1"
-_PROTOCOL_VERSION = 65580
-_CM_ATTEMPTS = 3
-_GCPD_TIMEOUT = 20
+_HTTP_TIMEOUT = 20
+_CM_TAKE = 8
+_LOGON_TIMEOUT = 12
 
-# CM logon results that mean the refresh token itself is bad/revoked — the caller
-# can treat the account as dead. Everything else (TryAnotherCM, ServiceUnavailable,
-# timeouts, "no response") is transient and must NEVER flag an account.
-_REJECTED_ERESULTS = frozenset({"InvalidPassword", "Expired", "Revoked", "AccessDenied"})
+# CM logon results that mean the refresh token itself is bad — the account can be
+# treated as dead: 5 InvalidPassword, 26 Revoked, 27 Expired, 63 AccountLogonDenied.
+# AccessDenied (15) is deliberately NOT here: it also comes up for an account that
+# is signed in right now or has been logged on repeatedly, so it is treated as
+# transient ("try again") rather than falsely calling a good token dead.
+_DEAD_ERESULTS = frozenset({5, 26, 27, 63})
 
 
 class TokenRejected(Exception):
-    """The CM logon rejected the refresh token (bad / revoked / expired)."""
-
-    def __init__(self, eresult: str):
-        super().__init__(eresult)
+    def __init__(self, eresult: int):
+        super().__init__(str(eresult))
         self.eresult = eresult
 
 
+class WsConnection(Connection):
+    """A WebSocket transport for ValvePython's CMClient. Each WebSocket binary
+    frame is exactly one Steam message, so the VT01+length framing the TCP
+    transport adds is not used here — the library's serialized message is sent
+    as-is and each received frame is one message."""
+
+    def connect(self, server_addr):
+        host, port = server_addr
+        try:
+            self.ws = websocket.create_connection(
+                f"wss://{host}:{port}/cmsocket/", timeout=10, enable_multithread=True
+            )
+        except Exception:  # noqa: BLE001
+            return False
+        self.server_addr = server_addr
+        self.recv_queue.queue.clear()
+        self._reader = gevent.spawn(self._reader_loop)
+        self._writer = gevent.spawn(self._writer_loop)
+        self.event_connected.set()
+        return True
+
+    def disconnect(self):
+        if not self.event_connected.is_set():
+            return
+        self.event_connected.clear()
+        self.server_addr = None
+        for greenlet in (self._reader, self._writer):
+            if greenlet:
+                greenlet.kill(block=False)
+        self._reader = self._writer = None
+        self.send_queue.queue.clear()
+        self.recv_queue.queue.clear()
+        self.recv_queue.put(StopIteration)
+        try:
+            self.ws.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _writer_loop(self):
+        while True:
+            message = self.send_queue.get()
+            try:
+                self.ws.send_binary(message)
+            except Exception:  # noqa: BLE001
+                self.disconnect()
+                return
+
+    def _reader_loop(self):
+        while True:
+            try:
+                frame = self.ws.recv()
+            except Exception:  # noqa: BLE001
+                self.disconnect()
+                return
+            if not frame:
+                self.disconnect()
+                return
+            if isinstance(frame, str):
+                frame = frame.encode()
+            self.recv_queue.put(frame)
+
+
 def _clean_token(raw: str) -> str:
-    """Bare JWT from the app's ``username----<JWT>`` line (or a plain JWT). With
-    the prefix left on, the CM rejects the logon as InvalidPassword."""
     raw = (raw or "").strip()
     if "----" in raw:
         raw = raw.rsplit("----", 1)[-1]
@@ -84,15 +161,16 @@ def _jwt_sub(token: str) -> int:
     return int(json.loads(base64.urlsafe_b64decode(payload))["sub"])
 
 
-def _machine_id(seed: str) -> bytes:
-    """Steam machine-id KV MessageObject with three sha1 hashes (values arbitrary
-    but stable per account, so a switch does not look like a new machine)."""
+def _machine_id(account_id: str) -> bytes:
+    """Steam machine-id KV MessageObject, hashed the way the loader hashes it —
+    Steam ties a token to a machine id, and a mismatch is refused (AccessDenied),
+    so the exact input strings matter."""
 
     def cstr(text: str) -> bytes:
         return text.encode("utf-8") + b"\x00"
 
     def sha(tag: str) -> bytes:
-        return cstr(hashlib.sha1((tag + seed).encode()).hexdigest())
+        return cstr(hashlib.sha1(f"SteamUser Hash {tag} {account_id}".encode()).hexdigest())
 
     return (
         b"\x00" + cstr("MessageObject")
@@ -103,128 +181,109 @@ def _machine_id(seed: str) -> bytes:
     )
 
 
-def _token_logon(client, refresh_token: str, steamid: int):
-    """Secure the channel, then send a ClientLogon carrying the refresh token in
-    access_token (field 108). Returns the ClientLogOnResponse or None."""
-    from steam.core.msg import MsgProto
-    from steam.enums import EResult
-    from steam.enums.emsg import EMsg
-    from steam.steamid import SteamID
+def _cm_servers() -> list[tuple[str, int]]:
+    url = (
+        "https://api.steampowered.com/ISteamDirectory/GetCMListForConnect/v0001/"
+        "?format=json&cellid=0&cmtype=websockets"
+    )
+    data = json.loads(urllib.request.urlopen(url, timeout=_HTTP_TIMEOUT).read())
+    out = []
+    for entry in data["response"]["serverlist"]:
+        endpoint = entry.get("endpoint", "")
+        if ":" in endpoint:
+            host, port = endpoint.rsplit(":", 1)
+            out.append((host, int(port)))
+    return out
 
-    if client._pre_login() != EResult.OK:  # waits for the channel to be secured
-        return None
-    msg = MsgProto(EMsg.ClientLogon)
-    msg.header.steamid = SteamID(steamid).as_64
-    body = msg.body
-    body.protocol_version = _PROTOCOL_VERSION
-    body.client_os_type = 20  # Windows 10
+
+def _logon(client: SteamClient, token: str, steamid: int) -> int:
+    """Send a ClientLogon carrying the token, return its eresult. The fields
+    mirror the nfa.pub loader's; Steam refuses the logon if they differ."""
+    message = MsgProto(EMsg.ClientLogon)
+    message.header.steamid = SteamID(steamid).as_64
+    body = message.body
+    body.protocol_version = 65580
     body.client_language = "english"
+    body.client_os_type = 16  # Windows 10
     body.should_remember_password = True
-    body.supports_rate_limit_response = True
-    body.chat_mode = 2
-    body.machine_name = ""
-    try:
-        body.obfuscated_private_ip.v4 = 0
-    except Exception:  # noqa: BLE001 - field shape varies by proto build
-        pass
+    body.obfuscated_private_ip.v4 = 0xA1A2A3A4
     body.machine_id = _machine_id(str(steamid))
-    body.access_token = refresh_token
-    client.send(msg)
-    return client.wait_msg(EMsg.ClientLogOnResponse, timeout=30)
+    body.chat_mode = 2
+    body.machine_name = "unsub-all"
+    body.supports_rate_limit_response = True
+    body.access_token = token
+    client.send(message)
+    reply = client.wait_msg(EMsg.ClientLogOnResponse, timeout=_LOGON_TIMEOUT)
+    return reply.body.eresult if reply else 0
 
 
-def mint_web_cookies(refresh_token: str) -> dict | None:
+def mint_web_cookies(refresh_token: str, steamid: int) -> dict | None:
     """Return ``{"steamLoginSecure": ..., "sessionid": ...}`` or None on a
     transient failure. Raises :class:`TokenRejected` when the token is dead.
 
-    Non-destructive: the refresh token is used only to log on and to mint a web
-    access token with renewal disabled; it is never rotated.
+    Non-destructive: the token logs on and mints a web access token with renewal
+    not requested; if the mint hands back a rotated refresh token the result is
+    thrown away rather than used.
     """
-    token = _clean_token(refresh_token)
-    if not token:
-        return None
     try:
-        steamid = _jwt_sub(token)
-    except Exception:  # noqa: BLE001
-        logger.warning("could not decode steamid from the refresh token")
+        servers = _cm_servers()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("%s could not fetch the CM list: %s", _elapsed(), exc)
         return None
 
-    from steam.client import SteamClient
-    from steam.enums import EResult
-
-    client = SteamClient()
-    try:
-        resp = None
-        rejected = None
-        for attempt in range(1, _CM_ATTEMPTS + 1):
-            logger.info("%s attempt %d: connecting to a CM", _elapsed(), attempt)
-            if not client.connected and client.connect() is None:
-                logger.info("%s attempt %d: could not connect to a CM", _elapsed(), attempt)
+    rejected: int | None = None
+    for host, port in servers[:_CM_TAKE]:
+        client = SteamClient()
+        client.connection = WsConnection()
+        client.cm_servers.clear()
+        client.cm_servers.merge_list([(host, port)])
+        try:
+            logger.info("%s connecting to %s", _elapsed(), host)
+            if not client.connect():
                 continue
-            logger.info("%s attempt %d: connected, logging on", _elapsed(), attempt)
-            reply = _token_logon(client, token, steamid)
-            if reply is not None and reply.body.eresult == EResult.OK:
-                logger.info("%s attempt %d: logon OK", _elapsed(), attempt)
-                resp = reply
-                break
-            reason = (
-                EResult(reply.body.eresult).name
-                if reply is not None and reply.body.eresult in EResult._value2member_map_
-                else "no response"
-            )
-            logger.info("%s attempt %d: logon failed (%s)", _elapsed(), attempt, reason)
+            client.channel_secured = True  # WebSocket is TLS; skip the AES handshake
+
+            eresult = _logon(client, refresh_token, steamid)
+            if eresult == 1:
+                logger.info("%s logon OK", _elapsed())
+                um = client.send_um_and_wait(
+                    _UM_METHOD,
+                    {"refresh_token": refresh_token, "steamid": steamid},
+                    timeout=15,
+                )
+                if getattr(um.body, "refresh_token", "") if um else "":
+                    logger.error("%s mint returned a rotated token — aborting", _elapsed())
+                    return None
+                access_token = getattr(um.body, "access_token", "") if um else ""
+                if not access_token:
+                    logger.warning("%s mint returned no access token", _elapsed())
+                    return None
+                logger.info("%s cookie minted", _elapsed())
+                return {
+                    "steamLoginSecure": urllib.parse.quote(
+                        f"{steamid}||{access_token}", safe=""
+                    ),
+                    "sessionid": secrets.token_hex(12),
+                }
+
+            logger.info("%s logon failed (eresult=%s)", _elapsed(), eresult)
+            if eresult in _DEAD_ERESULTS:
+                rejected = eresult
+                break  # a bad token will not recover on another CM
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s CM attempt error: %s", _elapsed(), exc)
+        finally:
             try:
                 client.disconnect()
             except Exception:  # noqa: BLE001
                 pass
-            if reason in _REJECTED_ERESULTS:
-                rejected = reason  # a bad token will not recover on retry
-                break
 
-        if resp is None:
-            if rejected is not None:
-                raise TokenRejected(rejected)
-            logger.warning("CM logon failed after %d attempts", _CM_ATTEMPTS)
-            return None
-
-        # Mint the web access token over the AUTHENTICATED session. Only
-        # refresh_token + steamid are sent — no renewal_type, so the CM leaves
-        # the refresh token untouched.
-        um = client.send_um_and_wait(
-            _UM_METHOD, {"refresh_token": token, "steamid": steamid}, timeout=15
-        )
-        if um is None or um.header.eresult != EResult.OK:
-            reason = (
-                EResult(um.header.eresult).name
-                if um is not None and um.header.eresult in EResult._value2member_map_
-                else "no response"
-            )
-            logger.warning("GenerateAccessTokenForApp failed (%s)", reason)
-            return None
-
-        if getattr(um.body, "refresh_token", ""):  # must never happen
-            logger.error("CM returned a rotated refresh token — aborting to be safe")
-            return None
-        access_token = getattr(um.body, "access_token", "") or ""
-        if not access_token:
-            logger.warning("mint returned no access token")
-            return None
-
-        logger.info("web cookie minted for %s (non-destructive)", steamid)
-        return {
-            "steamLoginSecure": urllib.parse.quote(f"{steamid}||{access_token}", safe=""),
-            "sessionid": secrets.token_hex(12),
-        }
-    finally:
-        try:
-            client.disconnect()
-        except Exception:  # noqa: BLE001
-            pass
+    if rejected is not None:
+        raise TokenRejected(rejected)
+    return None
 
 
 def fetch_gcpd_html(steamid: int, cookies: dict) -> str | None:
-    """Read-only GET of the account's own matchmaking GCPD page. Returns the HTML,
-    or None if the page did not authenticate (so the caller can retry)."""
     url = (
         f"https://steamcommunity.com/profiles/{steamid}"
         "/gcpd/730?tab=matchmaking&l=english"
@@ -234,58 +293,40 @@ def fetch_gcpd_html(steamid: int, cookies: dict) -> str | None:
         url, headers={"Cookie": header, "User-Agent": "Mozilla/5.0"}
     )
     try:
-        with urllib.request.urlopen(request, timeout=_GCPD_TIMEOUT) as response:
+        with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
             html = response.read().decode("utf-8", "replace")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("GCPD fetch failed: %s", exc)
+        logger.warning("%s GCPD fetch failed: %s", _elapsed(), exc)
         return None
-    # The Rust parser makes the same two checks; failing fast here keeps a login
-    # redirect from being reported as "unranked".
     if "g_steamID = false" in html or "<title>Sign In" in html:
-        logger.warning("GCPD page came back as the sign-in page")
         return None
     if "generic_kv_table" not in html and "Personal Game Data" not in html:
-        logger.warning("response was not the GCPD page")
         return None
     return html
 
 
 def fetch_vac(steamid: int) -> bool | None:
-    """VAC ban flag from the public community profile XML.
-
-    VAC status is public — it needs no login and is not on the GCPD page, so it
-    is read separately here from `/profiles/<id>/?xml=1`, which every account
-    exposes whether or not the profile is private. None means the lookup did not
-    resolve (kept apart from a confirmed clean account).
-    """
     url = f"https://steamcommunity.com/profiles/{steamid}/?xml=1"
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with urllib.request.urlopen(request, timeout=_GCPD_TIMEOUT) as response:
+        with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
             body = response.read().decode("utf-8", "replace")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("VAC lookup failed: %s", exc)
+        logger.warning("%s VAC lookup failed: %s", _elapsed(), exc)
         return None
     match = _VAC_RE.search(body)
-    if match is None:
-        logger.warning("VAC field not present in the profile XML")
-        return None
-    return match.group(1) == "1"
+    return (match.group(1) == "1") if match else None
 
 
 def run(refresh_token: str) -> dict:
-    """The whole flow, as a JSON-able envelope. Never raises."""
+    token = _clean_token(refresh_token)
     try:
-        steamid = _jwt_sub(_clean_token(refresh_token))
+        steamid = _jwt_sub(token)
     except Exception:  # noqa: BLE001
         return {"status": "error", "error": "bad token"}
 
     logger.info("%s check start for %s", _elapsed(), steamid)
 
-    # VAC is public and independent of the logon, so fetch it on its own thread
-    # while the slow part — the CM logon and the GCPD read — runs. It uses plain
-    # urllib on a separate OS thread, so it overlaps the main thread's gevent
-    # work rather than waiting behind it. Daemon, so an early return abandons it.
     vac = {}
     vac_thread = threading.Thread(
         target=lambda: vac.__setitem__("banned", fetch_vac(steamid)), daemon=True
@@ -293,40 +334,29 @@ def run(refresh_token: str) -> dict:
     vac_thread.start()
 
     try:
-        cookies = mint_web_cookies(refresh_token)
-    except TokenRejected as rejected:
-        logger.warning("%s token rejected (%s) — account is dead", _elapsed(), rejected.eresult)
-        return {"status": "dead", "error": rejected.eresult}
+        cookies = mint_web_cookies(token, steamid)
+    except TokenRejected:
+        return {"status": "dead", "error": "rejected"}
     except Exception:  # noqa: BLE001
         logger.exception("unexpected error during cookie mint")
         return {"status": "error", "error": "mint failed"}
 
-    if not cookies or not cookies.get("steamLoginSecure"):
-        logger.warning("%s cookie mint failed", _elapsed())
-        return {"status": "error", "error": "cookie mint failed"}
-    logger.info("%s cookie minted", _elapsed())
+    if not cookies:
+        return {"status": "error", "error": "could not reach Steam"}
 
     html = fetch_gcpd_html(steamid, cookies)
     if html is None:
-        logger.warning("%s GCPD fetch failed", _elapsed())
         return {"status": "error", "error": "gcpd fetch failed"}
 
-    vac_thread.join(timeout=_GCPD_TIMEOUT)
+    vac_thread.join(timeout=_HTTP_TIMEOUT)
     logger.info("%s done — %d bytes, vac=%s", _elapsed(), len(html), vac.get("banned"))
     return {"status": "ok", "html": html, "vacBanned": vac.get("banned")}
 
 
 def _log_file_path() -> str | None:
-    """A log beside the app's own data (%APPDATA%\\ir.nfastore.tool), so a slow
-    or failed check leaves a trace the customer can send back."""
-    base = os.environ.get("APPDATA")
-    if not base:
-        return None
-    folder = os.path.join(base, "ir.nfastore.tool")
     try:
-        os.makedirs(folder, exist_ok=True)
-        return os.path.join(folder, "cs2-rank.log")
-    except OSError:
+        return os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "cs2-rank.log")
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -339,17 +369,10 @@ def main(argv: list[str]) -> int:
         except OSError:
             pass
     logging.basicConfig(
-        level=logging.INFO,
-        handlers=handlers,
-        format="%(asctime)s %(message)s",
-        datefmt="%H:%M:%S",
+        level=logging.INFO, handlers=handlers, format="%(asctime)s %(message)s", datefmt="%H:%M:%S"
     )
 
-    # A network-free check that the frozen exe runs and its imports resolve; used
-    # by CI so a broken build fails there rather than on a customer's machine.
     if "--selftest" in argv:
-        from steam.client import SteamClient  # noqa: F401
-
         sys.stdout.write(json.dumps({"status": "selftest-ok"}))
         return 0
 
@@ -358,8 +381,7 @@ def main(argv: list[str]) -> int:
         sys.stdout.write(json.dumps({"status": "error", "error": "no token on stdin"}))
         return 0
 
-    result = run(token)
-    sys.stdout.write(json.dumps(result))
+    sys.stdout.write(json.dumps(run(token)))
     return 0
 
 

@@ -1,5 +1,6 @@
-# Runtime dependency for the CS2 rank sidecar. Pinned so the frozen build is
-# reproducible; the rest of the tree resolves from steam's own constraints.
-# (gevent 26.9.0 is the first with a cp313 wheel, so Python 3.13 needs no build
-# tools.)
+# Runtime dependencies for the CS2 rank sidecar, pinned so the frozen build is
+# reproducible. steam (ValvePython) speaks the Steam CM protocol; the sidecar
+# supplies a WebSocket transport for it (websocket-client) because Steam's TCP
+# CM is filtered on some connections while the WebSocket CM is not.
 steam[client]==1.4.4
+websocket-client==1.9.0

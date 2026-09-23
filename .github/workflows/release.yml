@@ -123,7 +123,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r sidecar/requirements.txt pyinstaller
           pyinstaller --onefile --name cs2-rank-sidecar --console --clean --noconfirm `
-            --collect-submodules steam --collect-submodules gevent `
+            --collect-submodules steam --collect-submodules gevent --collect-submodules websocket `
             --distpath src-tauri/binaries --workpath build/sidecar --specpath build/sidecar `
             sidecar/cs2_rank.py
           if (-not (Test-Path src-tauri/binaries/cs2-rank-sidecar.exe)) {
