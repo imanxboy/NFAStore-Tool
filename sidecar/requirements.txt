@@ -1,0 +1,5 @@
+# Runtime dependency for the CS2 rank sidecar. Pinned so the frozen build is
+# reproducible; the rest of the tree resolves from steam's own constraints.
+# (gevent 26.9.0 is the first with a cp313 wheel, so Python 3.13 needs no build
+# tools.)
+steam[client]==1.4.4
