@@ -3,6 +3,8 @@ const listen = window.__TAURI__.event.listen;
 
 const el = (id) => document.getElementById(id);
 const accountList = el("accountList");
+const detailPane = el("detailPane");
+const workspace = el("workspace");
 const accountCount = el("accountCount");
 const emptyState = el("emptyState");
 const toastWrap = el("toastWrap");
@@ -11,6 +13,8 @@ let accounts = [];
 // Keyed by steamid: {loading} | {data: Cs2Rank} | {error}. Kept across renders
 // so a rank a customer pulled stays put until they ask again or reopen the app.
 let ranks = {};
+// Which account the detail panel is showing.
+let selectedSteamid = null;
 let confirmHandler = null;
 let settings = {
   always_invisible: true,
@@ -19,15 +23,6 @@ let settings = {
   launch_steam_minimized: false,
   mute_notifications_on_login: false,
 };
-
-const SIGNIN_SVG =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/></svg>';
-const COPY_SVG =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-const TRASH_SVG =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
-const RANK_SVG =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3"/></svg>';
 
 /** The far-future second the parser uses for a ban with no end (see gcpd.rs). */
 const COOLDOWN_PERMANENT = 2000000000;
@@ -75,30 +70,19 @@ function cooldownText(unix) {
   return { text: `Cooldown ${Math.floor(hours / 24)}d`, level: "gone" };
 }
 
-/** The rank line under an account: nothing until asked, then chips or a reason. */
-function rankArea(steamid) {
-  const r = ranks[steamid];
-  if (!r) return "";
-  if (r.loading) return '<div class="row-rank muted">Checking status…</div>';
-  if (r.error) return `<div class="row-rank err">${escapeHtml(r.error)}</div>`;
+/** Token expiry as a detail-row value (label supplies the word "Token"). */
+function tokenRowValue(seconds) {
+  const e = tokenExpiry(seconds);
+  if (!e) return { text: "—", level: "dim" };
+  const text = e.text.replace(/^Token /, "").replace(/^./, (c) => c.toUpperCase());
+  return { text, level: e.level };
+}
 
-  const d = r.data;
-  const chips = [];
-  if (d.premierRating > 0) {
-    chips.push(`<span class="rank-chip">Premier ${d.premierRating.toLocaleString("en-US")}</span>`);
-  }
-  if (d.wingmanRank > 0) {
-    chips.push(`<span class="rank-chip">Wingman ${d.wingmanRank}</span>`);
-  }
-  if (d.premierRating <= 0 && d.wingmanRank <= 0) {
-    chips.push('<span class="rank-chip">Unranked</span>');
-  }
-  const cd = cooldownText(d.cooldownExpiresUnix);
-  chips.push(`<span class="rank-chip ${cd.level}">${escapeHtml(cd.text)}</span>`);
-  // null = the VAC lookup did not resolve; only speak when we actually know.
-  if (d.vacBanned === true) chips.push('<span class="rank-chip gone">VAC banned</span>');
-  else if (d.vacBanned === false) chips.push('<span class="rank-chip ok">No VAC</span>');
-  return `<div class="row-rank">${chips.join("")}</div>`;
+/** VAC as a detail-row value. null (unresolved) is not the same as clean. */
+function vacRowValue(v) {
+  if (v === true) return { text: "Banned", level: "gone" };
+  if (v === false) return { text: "None", level: "ok" };
+  return { text: "—", level: "dim" };
 }
 
 function toast(message, kind = "ok") {
@@ -135,50 +119,155 @@ function displayAccount(acc, index) {
   };
 }
 
+function avatarHtml(view, cls) {
+  return view.avatar
+    ? `<div class="avatar ${cls}"><img src="${escapeAttr(view.avatar)}" alt="" /></div>`
+    : `<div class="avatar ${cls}">${escapeHtml(view.initials)}</div>`;
+}
+
 function render() {
   accountCount.textContent = accounts.length ? String(accounts.length) : "";
 
   if (accounts.length === 0) {
+    workspace.classList.add("is-empty");
     accountList.innerHTML = "";
-    emptyState.classList.remove("hidden");
+    detailPane.innerHTML = "";
     return;
   }
-  emptyState.classList.add("hidden");
+  workspace.classList.remove("is-empty");
 
+  // Keep the selection valid; default to the last-used account.
+  if (!accounts.some((a) => a.steamid === selectedSteamid)) {
+    selectedSteamid = (accounts.find((a) => a.most_recent) || accounts[0]).steamid;
+  }
+
+  renderList();
+  renderDetail();
+}
+
+function renderList() {
   accountList.innerHTML = accounts
     .map((acc, index) => {
       const view = displayAccount(acc, index);
-      const avatar = view.avatar
-        ? `<div class="avatar"><img src="${escapeAttr(view.avatar)}" alt="" /></div>`
-        : `<div class="avatar">${escapeHtml(view.initials)}</div>`;
-      const tag = acc.most_recent ? '<span class="row-tag">Last used</span>' : "";
-      // Hidden in streamer mode along with everything else that identifies the
-      // account: a precise expiry date is as good as a fingerprint on stream.
-      const expiry = settings.streamer_mode ? null : tokenExpiry(acc.token_expires_at);
-      // Rank and its button hide with everything else on stream: a Premier
-      // rating and win count point at a specific account as surely as a name.
-      const showRank = !settings.streamer_mode;
-      const rankBtn = showRank
-        ? `<button class="icon-btn" data-rank="${escapeAttr(acc.steamid)}" title="Check CS2 status" aria-label="Check the CS2 rank and cooldown for ${escapeAttr(view.display_name)}">${RANK_SVG}</button>`
-        : "";
+      const tag = acc.most_recent ? '<span class="li-tag">Last used</span>' : "";
+      const selected = acc.steamid === selectedSteamid ? " selected" : "";
+      // A checked account carries its cooldown as a hint, unless on stream.
+      const r = ranks[acc.steamid];
+      let hint = "";
+      if (!settings.streamer_mode && r && r.data) {
+        const cd = cooldownText(r.data.cooldownExpiresUnix);
+        hint = `<span class="li-hint ${cd.level}">${escapeHtml(cd.text)}</span>`;
+      }
       return `
-        <div class="row">
-          ${avatar}
-          <div class="row-info">
-            <div class="row-name"><span>${escapeHtml(view.display_name)}</span>${tag}</div>
-            <div class="row-login">${escapeHtml(view.account_name)}</div>
-            ${expiry ? `<div class="row-expiry ${expiry.level}">${escapeHtml(expiry.text)}</div>` : ""}
-            ${showRank ? rankArea(acc.steamid) : ""}
-          </div>
-          <div class="row-actions">
-            <button class="icon-btn primary" data-signin="${escapeAttr(acc.steamid)}" title="Sign in" aria-label="Sign in as ${escapeAttr(view.display_name)}">${SIGNIN_SVG}</button>
-            ${rankBtn}
-            <button class="icon-btn" data-copy="${escapeAttr(acc.steamid)}" title="Copy login token" aria-label="Copy the login token for ${escapeAttr(view.display_name)}">${COPY_SVG}</button>
-            <button class="icon-btn danger" data-remove="${escapeAttr(acc.steamid)}" title="Remove" aria-label="Remove account">${TRASH_SVG}</button>
-          </div>
-        </div>`;
+        <button class="li${selected}" data-select="${escapeAttr(acc.steamid)}">
+          ${avatarHtml(view, "")}
+          <span class="li-info">
+            <span class="li-name"><span>${escapeHtml(view.display_name)}</span>${tag}</span>
+            <span class="li-sub">${escapeHtml(view.account_name)}</span>
+            ${hint}
+          </span>
+        </button>`;
     })
     .join("");
+}
+
+/** One stat box (Premier / Wingman) for the detail panel. */
+function statBox(label, state, value, note) {
+  const known = state === "value";
+  const valueClass = known ? "" : " dim";
+  return `
+    <div class="stat-box">
+      <div class="stat-box-label">${escapeHtml(label)}</div>
+      <div class="stat-box-value${valueClass}">${escapeHtml(value)}</div>
+      <div class="stat-box-note">${escapeHtml(note)}</div>
+    </div>`;
+}
+
+function renderDetail() {
+  const acc = accounts.find((a) => a.steamid === selectedSteamid);
+  if (!acc) {
+    detailPane.innerHTML = '<div class="detail-empty">Select an account.</div>';
+    return;
+  }
+  const index = accounts.indexOf(acc);
+  const view = displayAccount(acc, index);
+  const streamer = settings.streamer_mode;
+  const sid = escapeAttr(acc.steamid);
+  const r = ranks[acc.steamid];
+  const d = r && r.data;
+  const loading = Boolean(r && r.loading);
+
+  // Premier / Wingman boxes.
+  let premier;
+  let wingman;
+  if (loading) {
+    premier = statBox("Premier", "dim", "…", "Checking…");
+    wingman = statBox("Wingman", "dim", "…", "Checking…");
+  } else if (d) {
+    premier =
+      d.premierRating > 0
+        ? statBox("Premier", "value", d.premierRating.toLocaleString("en-US"), "CS Rating")
+        : statBox("Premier", "dim", "—", "No rating yet");
+    wingman =
+      d.wingmanRank > 0
+        ? statBox("Wingman", "value", String(d.wingmanRank), "Rank")
+        : statBox("Wingman", "dim", "—", "Unranked");
+  } else {
+    premier = statBox("Premier", "dim", "—", "Not checked");
+    wingman = statBox("Wingman", "dim", "—", "Not checked");
+  }
+
+  // Token comes from the stored token itself and needs no lookup.
+  const token = tokenRowValue(acc.token_expires_at);
+  // Cooldown / VAC only after a check.
+  let cooldown = { text: "—", level: "dim" };
+  let vac = { text: "—", level: "dim" };
+  if (loading) {
+    cooldown = { text: "Checking…", level: "dim" };
+    vac = { text: "Checking…", level: "dim" };
+  } else if (d) {
+    cooldown = cooldownText(d.cooldownExpiresUnix);
+    vac = vacRowValue(d.vacBanned);
+  }
+
+  const errorRow =
+    r && r.error
+      ? `<div class="drow"><span class="drow-k">Status</span><span class="drow-v gone">${escapeHtml(r.error)}</span></div>`
+      : "";
+
+  // The whole stats block is identifying, so it is dropped on stream.
+  const stats = streamer
+    ? ""
+    : `
+      <div class="stat-boxes">${premier}${wingman}</div>
+      <div class="detail-rows">
+        <div class="drow"><span class="drow-k">Token</span><span class="drow-v ${token.level}">${escapeHtml(token.text)}</span></div>
+        <div class="drow"><span class="drow-k">Cooldown</span><span class="drow-v ${cooldown.level}">${escapeHtml(cooldown.text)}</span></div>
+        <div class="drow"><span class="drow-k">VAC</span><span class="drow-v ${vac.level}">${escapeHtml(vac.text)}</span></div>
+        ${errorRow}
+      </div>`;
+
+  const refreshBtn = streamer
+    ? ""
+    : `<button class="btn wide" data-rank="${sid}"${loading ? " disabled" : ""}>${loading ? "Checking status…" : "Refresh status"}</button>`;
+
+  detailPane.innerHTML = `
+    <div class="detail">
+      <div class="detail-head">
+        ${avatarHtml(view, "avatar-lg")}
+        <div class="detail-id">
+          <div class="detail-name"><span>${escapeHtml(view.display_name)}</span></div>
+          <div class="detail-sub">${escapeHtml(streamer ? "••••••••" : acc.steamid)}</div>
+        </div>
+      </div>
+      ${stats}
+      <div class="detail-actions">
+        ${refreshBtn}
+        <button class="btn btn-accent" data-signin="${sid}">Sign in</button>
+        <button class="btn" data-copy="${sid}">Copy token</button>
+        <button class="btn danger" data-remove="${sid}">Remove</button>
+      </div>
+    </div>`;
 }
 
 async function refresh() {
@@ -526,6 +615,11 @@ document.addEventListener("click", (e) => {
     if (action === "close-confirm") closeConfirm();
     if (action === "close-settings") closeSettings();
     return;
+  }
+  const select = e.target.closest("[data-select]");
+  if (select) {
+    selectedSteamid = select.dataset.select;
+    return render();
   }
   const signin = e.target.closest("[data-signin]");
   if (signin) return signIn(signin.dataset.signin);

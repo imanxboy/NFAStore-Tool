@@ -30,6 +30,7 @@ import logging
 import re
 import secrets
 import sys
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -261,6 +262,21 @@ def fetch_vac(steamid: int) -> bool | None:
 def run(refresh_token: str) -> dict:
     """The whole flow, as a JSON-able envelope. Never raises."""
     try:
+        steamid = _jwt_sub(_clean_token(refresh_token))
+    except Exception:  # noqa: BLE001
+        return {"status": "error", "error": "bad token"}
+
+    # VAC is public and independent of the logon, so fetch it on its own thread
+    # while the slow part — the CM logon and the GCPD read — runs. It uses plain
+    # urllib on a separate OS thread, so it overlaps the main thread's gevent
+    # work rather than waiting behind it. Daemon, so an early return abandons it.
+    vac = {}
+    vac_thread = threading.Thread(
+        target=lambda: vac.__setitem__("banned", fetch_vac(steamid)), daemon=True
+    )
+    vac_thread.start()
+
+    try:
         cookies = mint_web_cookies(refresh_token)
     except TokenRejected as rejected:
         return {"status": "dead", "error": rejected.eresult}
@@ -271,15 +287,12 @@ def run(refresh_token: str) -> dict:
     if not cookies or not cookies.get("steamLoginSecure"):
         return {"status": "error", "error": "cookie mint failed"}
 
-    try:
-        steamid = _jwt_sub(_clean_token(refresh_token))
-    except Exception:  # noqa: BLE001
-        return {"status": "error", "error": "bad token"}
-
     html = fetch_gcpd_html(steamid, cookies)
     if html is None:
         return {"status": "error", "error": "gcpd fetch failed"}
-    return {"status": "ok", "html": html, "vacBanned": fetch_vac(steamid)}
+
+    vac_thread.join(timeout=_GCPD_TIMEOUT)
+    return {"status": "ok", "html": html, "vacBanned": vac.get("banned")}
 
 
 def main(argv: list[str]) -> int:
