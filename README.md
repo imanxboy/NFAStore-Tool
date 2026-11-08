@@ -6,12 +6,12 @@
 
 **ورود سریع به اکانت‌های استیم با توکن — بدون رمز عبور، بدون مرورگر**
 
-[![Version](https://img.shields.io/badge/version-v1.3.0-F26F21?style=flat-square)](https://github.com/imanxboy/NFAStore-Tool/releases/latest)
+[![Version](https://img.shields.io/github/v/release/imanxboy/NFAStore-Tool?style=flat-square&color=F26F21&label=version)](https://github.com/imanxboy/NFAStore-Tool/releases/latest)
 [![Platform](https://img.shields.io/badge/Windows-x64-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://github.com/imanxboy/NFAStore-Tool/releases/latest)
 [![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
 [![Source](https://img.shields.io/badge/source-open-2ea44f?style=flat-square&logo=github&logoColor=white)](https://github.com/imanxboy/NFAStore-Tool)
 
-[دانلود آخرین نسخه](https://github.com/imanxboy/NFAStore-Tool/releases/latest) · [فروشگاه NFAStore](https://nfastore.org)
+[دانلود آخرین نسخه](https://github.com/imanxboy/NFAStore-Tool/releases/latest) · [فروشگاه NFAStore](https://nfastore.org) · [English](#english)
 
 </div>
 
@@ -30,7 +30,7 @@
 ## دانلود و نصب
 
 ۱. به [صفحهٔ Releases](https://github.com/imanxboy/NFAStore-Tool/releases/latest) بروید.
-۲. فایل `nfastore-tool-v1.3.0-setup.exe` را دانلود کنید.
+۲. فایل `nfastore-tool-setup.exe` را دانلود کنید، یا مستقیم از [این لینک](https://github.com/imanxboy/NFAStore-Tool/releases/latest/download/nfastore-tool-setup.exe).
 ۳. اجرایش کنید. نصب چند ثانیه طول می‌کشد.
 
 > **ویندوز ممکن است هشدار بدهد.** پیام «Windows protected your PC» به این معنا نیست که فایل ویروس دارد — به این معناست که این نصاب گواهی امضای دیجیتال (code signing certificate) ندارد، که برای یک برنامهٔ رایگان چیز عادی است. روی **More info** و بعد **Run anyway** بزنید.
@@ -227,6 +227,55 @@
 
 ---
 
+
+## لینک‌های مفید
+
+- [راهنمای ورود به اکانت NFA](https://nfastore.org/fa/how-to-login)
+- [بررسی توکن استیم، داخل مرورگر خودتان](https://nfastore.org/fa/tools/steam-token-checker)
+- [اکانت NFA چیست؟](https://nfastore.org/fa/guides/nfa-account)
+- [ویدیوی آموزش ورود در آپارات](https://www.aparat.com/v/sujd5f2)
+
+---
+
+<div dir="ltr">
+
+## English
+
+**Log in to an NFA Steam account with its token: no password, no browser.**
+
+When you buy an account from [NFAStore](https://nfastore.org/en), you get a login token, not a password. NFA accounts come without the password or the email; the token is what Steam accepts instead. Steam has no box to paste a token into, so NFAStore Tool writes it exactly where Steam itself saves a login after a successful sign-in, then starts Steam already signed in. The source is open: every line it runs is in this repository.
+
+### Download
+
+Get [`nfastore-tool-setup.exe`](https://github.com/imanxboy/NFAStore-Tool/releases/latest/download/nfastore-tool-setup.exe) from the [latest release](https://github.com/imanxboy/NFAStore-Tool/releases/latest) (Windows x64). The installer is not code-signed, so Windows may say "Windows protected your PC": click **More info**, then **Run anyway**.
+
+### Use
+
+1. If Steam has never been signed in on this PC, open it once and sign in with any account, so its config files exist.
+2. Copy the whole login from your NFAStore order page. Any shape works: with or without the SteamID, with spaces or line breaks in it, or with extra fields attached.
+3. Open the tool, click **Import account**, paste and confirm. One account per line imports several at once.
+4. The tool closes Steam, writes the token and starts Steam again, signed in.
+
+Imported accounts stay in the list; switch with the **←** button next to a name. Each account shows when its token expires, read from the token itself on your PC. The **◎** button reads the account's CS2 Premier rating, profile level and competitive cooldown, and **Check all** checks every account in turn.
+
+> ⚠️ Never sign out of Steam on an NFA account: that invalidates the token for good. When you are done, just close Steam.
+
+### What it does to your PC
+
+- Reads Steam's install path from the registry, and Steam's `config.vdf`, `loginusers.vdf` and `local.vdf`.
+- Writes the token into `local.vdf`, sealed with Windows DPAPI, the same way Steam stores its own; adds the account to Steam's list and sets `AutoLoginUser`. Its own settings live in `%APPDATA%\ir.nfastore.tool\`.
+- Runs only two processes: `taskkill` to close Steam, and `steam.exe` to open it.
+- Goes online only to check GitHub for updates, and, when you press ◎, to sign in to Steam's own servers and read the account's rank. The token goes to Steam and nowhere else; nothing is sent to us or to anyone else.
+
+### More
+
+- [How to log in to an NFA Steam account](https://nfastore.org/en/how-to-login)
+- [Steam token checker: decode a login token in your browser](https://nfastore.org/en/tools/steam-token-checker)
+- [What is an NFA account?](https://nfastore.org/en/guides/nfa-account)
+
+</div>
+
+---
 
 <div align="center">
 
